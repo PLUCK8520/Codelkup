@@ -1,0 +1,43 @@
+HELP.md
+target/
+!.mvn/wrapper/maven-wrapper.jar
+!**/src/main/**/target/
+!**/src/test/**/target/
+
+### IntelliJ IDEA ###
+.idea/
+*.iws
+*.iml
+*.ipr
+
+### Eclipse ###
+.apt_generated
+.classpath
+.factorypath
+.project
+.settings
+.springBeans
+.sts4-cache
+
+### VS Code ###
+.vscode/
+
+### 密钥与本地配置（⚠️ 绝不提交）###
+.env
+.env.local
+application-dev.yml
+application-local.yml
+*.pem
+*.key
+
+### 日志 ###
+*.log
+logs/
+
+### 上传文件（本地存储）###
+/uploads/
+upload/
+
+### OS ###
+.DS_Store
+Thumbs.db

@@ -1,0 +1,408 @@
+/* ============================================================
+   设计令牌（Design Tokens）
+   来源：ui-ux-pro-max --design-system（Forum/Discussion Board + Dark Mode OLED）
+
+   ⚠️ 规则：组件里禁止写死十六进制色值，一律引用这里的 CSS 变量。
+      换主题/调色只需改这一处，不必全局搜索替换。
+
+   ------------------------------------------------------------
+   2026-09-25 修订说明（视觉层级重做）
+   ------------------------------------------------------------
+   上一版的问题：primary / secondary / border / muted 全是同一族
+   slate 灰阶（#475569 / #64748B / #334155 / #1E293B），彼此色差极小，
+   于是整个界面呈现为"一片灰 + 一个蓝点缀"，卡片与背景几乎分不开，
+   视觉上扁平、廉价。本次修订做三件事：
+
+   1. **拉开表面层级**：背景更深、卡片更亮，让卡片真正"浮"起来
+      （旧值 background #0f172a vs card #111827 —— 亮度差不足 3%，
+       肉眼几乎无法区分，这是"平"的根因）
+   2. **让强调色有存在感**：accent 提亮 + 新增 soft/glow 两个派生令牌，
+      用于低调底色与发光，替代"到处描边"的旧做法
+   3. **补上设计系统要求的 Key Effects**：MASTER.md 写明
+      "Minimal glow (text-shadow 0 0 10px)"，上一版完全没有落地
+
+   对比度均按 WCAG AA（正文 4.5:1）校验。
+   ============================================================ */
+
+:root {
+  /* ---------- 品牌色 ---------- */
+  --color-primary: #475569;
+  --color-on-primary: #ffffff;
+  --color-secondary: #64748b;
+  --color-on-secondary: #ffffff;
+
+  /* ---------- 强调色 / CTA ----------
+     ⚠️ 这里刻意分成「前景」与「实心底」两个令牌，不是冗余：
+
+     --color-accent（#3b82f6）用于**前景**：链接、图标、强调文字、边框。
+       它需要与深色背景有足够对比 → 亮一些更好（卡片上 4.67:1 ✓）。
+
+     --color-accent-solid（#2563eb）用于**实心按钮的底色**。
+       白字压在上面必须 ≥4.5:1，而 #3b82f6 只有 3.68:1（不达标）。
+       同一个色值不可能同时满足"深底上当文字要够亮"和"当底衬托白字要够暗"，
+       所以必须拆开。这是 WCAG 对比度算出来的结论，不是审美偏好。
+
+     旧版只用一个 #2563eb，做链接时偏暗、做按钮时刚好 —— 提亮后就顾此失彼。 */
+  --color-accent: #3b82f6;
+  --color-accent-hover: #60a5fa;
+  --color-accent-solid: #2563eb;
+  --color-accent-solid-hover: #1d4ed8;
+  --color-on-accent: #ffffff;
+  /* 派生令牌：低饱和底色与发光。用它们替代大面积的实心色块与粗描边 */
+  --color-accent-soft: rgba(59, 130, 246, 0.12);
+  --color-accent-border: rgba(59, 130, 246, 0.35);
+  --color-accent-glow: rgba(59, 130, 246, 0.28);
+
+  /* ---------- 表面（由深到浅，用于建立层级）----------
+     ★ 修订重点：三档之间的亮度差拉开到肉眼可辨。
+       旧值的三档（#0f172a / #111827 / #1e293b）几乎同色，
+       导致"卡片"和"页面底"分不出来，界面看起来是一整块。 */
+  --color-background: #0b1220; /* 页面底色（最深） */
+  --color-card: #121b2e; /* 卡片（明显亮于底色） */
+  --color-muted: #1a2540; /* 次级容器、输入框 */
+  --color-elevated: #202e4a; /* 浮层、下拉、弹窗 */
+
+  /* ---------- 文字 ----------
+     muted-foreground 从 #cbd5e1 降到 #a8b6cc：纯亮度堆太高会让
+     次要信息抢主标题的注意力，反而不显层次。
+
+     subtle-foreground 定为 #7d8da8：上一版 #6b7d99 在卡片上只有
+     4.11:1，达不到 AA 正文标准（它是占位符/时间戳这类会被真实阅读的文字，
+     不算纯装饰）。#7d8da8 在卡片上 5.11:1，既达标又仍明显弱于正文。 */
+  --color-foreground: #f1f5f9; /* 主文字 */
+  --color-card-foreground: #f1f5f9;
+  --color-muted-foreground: #a8b6cc; /* 次要文字：时间、计数 */
+  --color-subtle-foreground: #7d8da8; /* 更弱：占位符、禁用 */
+
+  /* ---------- 边框与分隔 ---------- */
+  --color-border: #2a3a57;
+  --color-border-subtle: #1a2540;
+
+  /* ---------- 语义色 ----------
+     destructive 从 #dc2626 换成品红系 #f43f5e：暗底上更醒目，
+     且与强调蓝形成明确的冷暖对立，警告不会"糊"在背景里。 */
+  --color-destructive: #f43f5e;
+  --color-on-destructive: #ffffff;
+  --color-success: #10b981;
+  --color-warning: #f59e0b;
+  --color-ring: #60a5fa; /* 键盘焦点环：比 accent 再亮一档，确保可见 */
+
+  /* ---------- 搜索命中高亮（Sprint 4）----------
+     浏览器对 <mark> 的默认样式是"黄底黑字"，在暗色主题下既刺眼又与色板无关。
+     这里把它统一到强调色：低透明度蓝底 + 提亮的前景色。 */
+  --color-highlight-bg: rgba(59, 130, 246, 0.30);
+  --color-highlight-fg: #dbeafe;
+
+  /* ---------- 间距（4px 基准，等比数列）----------
+     ★ 所有 margin/padding/gap 都必须取自这里，不要出现魔法数字 */
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 20px;
+  --space-6: 24px;
+  --space-8: 32px;
+  --space-10: 40px;
+  --space-12: 48px;
+  --space-16: 64px;
+  --space-20: 80px;
+  --space-24: 96px;
+
+  /* ---------- 圆角 ---------- */
+  --radius-sm: 6px;
+  --radius-md: 10px;
+  --radius-lg: 14px;
+  --radius-xl: 20px;
+  --radius-full: 9999px;
+
+  /* ---------- 字体 ----------
+     ★ 修订：原来指向 Google Fonts CDN（fonts.googleapis.com），
+       该域名在中国大陆无法直接访问 —— 字体加载失败后静默回退到
+       系统字体，等于"设计时按 IBM Plex Sans 调的排版全部落空"，
+       用户看到的其实是 Windows 默认的 Segoe UI + 微软雅黑。
+       现在改为 @fontsource 自托管（见 main.ts），不再依赖外部 CDN。
+
+     - Inter：拉丁字母与数字（设计系统推荐字体）
+     - 中文字形交给系统字体：中文 webfont 动辄数 MB，自托管不划算，
+       而 PingFang / 雅黑 / 思源的系统渲染质量本来就很好 */
+  --font-sans: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI',
+    'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', 'Noto Sans SC', sans-serif;
+  --font-mono: 'JetBrains Mono', 'SFMono-Regular', Consolas, 'Liberation Mono',
+    Menlo, monospace;
+
+  /* 字号：基准 16px，行高 1.5（可访问性下限） */
+  --text-xs: 12px;
+  --text-sm: 13px;
+  --text-base: 15px;
+  --text-md: 16px;
+  --text-lg: 18px;
+  --text-xl: 22px;
+  --text-2xl: 28px;
+  --text-3xl: 36px;
+  --text-4xl: 44px;
+
+  --leading-tight: 1.25;
+  --leading-snug: 1.4;
+  --leading-normal: 1.5;
+  --leading-relaxed: 1.75;
+
+  /* ---------- 阴影 ----------
+     暗色主题下"阴影"的可见度天然很低（黑压黑），
+     所以这里同时准备了 glow 系列：用色光替代投影来表达层级与焦点。 */
+  --shadow-sm: 0 1px 3px rgba(0, 0, 0, 0.45);
+  --shadow-md: 0 6px 20px rgba(0, 0, 0, 0.5);
+  --shadow-lg: 0 16px 40px rgba(0, 0, 0, 0.6);
+  --shadow-glow: 0 0 0 1px var(--color-accent-border), 0 10px 36px -8px var(--color-accent-glow);
+  --shadow-glow-sm: 0 0 0 1px var(--color-accent-border), 0 4px 18px -6px var(--color-accent-glow);
+
+  /* ---------- 容器宽度 ---------- */
+  --container-max: 1200px;
+  --container-narrow: 860px; /* 详情页正文区，过宽会降低可读性 */
+
+  /* ---------- 动效 ----------
+     ★ 修订：旧版所有过渡统一用 `ease`，动作"发木"。
+       这里引入三条曲线，按语义区分：
+       - fast/base/slow：时长（保持 150-300ms 的交互反馈区间）
+       - ease-out：进入与位移（快出慢收，最自然）
+       - ease-spring：需要一点"回弹感"的强调动作（如点赞）
+       - ease-in-out：颜色/透明度这类对称变化 */
+  --transition-fast: 150ms cubic-bezier(0.4, 0, 0.2, 1);
+  --transition-base: 220ms cubic-bezier(0.4, 0, 0.2, 1);
+  --transition-slow: 320ms cubic-bezier(0.4, 0, 0.2, 1);
+  --ease-out: cubic-bezier(0.22, 1, 0.36, 1);
+  --ease-spring: cubic-bezier(0.34, 1.56, 0.64, 1);
+}
+
+/* 尊重系统的"减少动态效果"偏好 —— 可访问性硬性要求 */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}
+
+/* ============================================================
+   Element Plus 暗色变量覆写
+   Element Plus 默认是亮色主题，通过覆写它的 CSS 变量接入我们的色板
+   ============================================================ */
+:root {
+  /* ⚠️ 用 accent-solid（#2563eb）而不是 accent（#3b82f6）：
+     Element 的主色绝大多数场景是**实心按钮底**，白字压其上必须 ≥4.5:1。
+     #3b82f6 + 白字只有 3.68:1（不达标），#2563eb + 白字是 5.17:1 ✓。
+     我们自己写的链接/图标则用 --color-accent，两者互不干扰。 */
+  --el-color-primary: var(--color-accent-solid);
+  --el-color-primary-light-3: #60a5fa;
+  --el-color-primary-light-5: #93c5fd;
+  --el-color-primary-light-7: #bfdbfe;
+  --el-color-primary-light-8: #dbeafe;
+  --el-color-primary-light-9: #14264a;
+  --el-color-primary-dark-2: var(--color-accent-hover);
+
+  --el-bg-color: var(--color-card);
+  --el-bg-color-page: var(--color-background);
+  --el-bg-color-overlay: var(--color-elevated);
+
+  --el-text-color-primary: var(--color-foreground);
+  --el-text-color-regular: var(--color-muted-foreground);
+  --el-text-color-secondary: var(--color-subtle-foreground);
+  --el-text-color-placeholder: var(--color-subtle-foreground);
+
+  --el-border-color: var(--color-border);
+  --el-border-color-light: var(--color-border-subtle);
+  --el-border-color-lighter: var(--color-border-subtle);
+  --el-fill-color-blank: var(--color-card);
+
+  --el-mask-color: rgba(11, 18, 32, 0.82);
+}
+
+/* ============================================================
+   全局基础样式
+   ============================================================ */
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#app {
+  height: 100%;
+}
+
+body {
+  margin: 0;
+  font-family: var(--font-sans);
+  font-size: var(--text-base);
+  line-height: var(--leading-normal);
+  color: var(--color-foreground);
+  /* ★ 关键改动：单一纯色背景 → 叠加两处极淡的径向光晕。
+     纯色暗底在 27 寸屏上会显得"空且平"，光晕给了纵深，
+     同时把视线引向页面中上部（内容区）。透明度压得很低（6%/5%），
+     只在余光里起作用，不会干扰阅读。 */
+  background-color: var(--color-background);
+  background-image:
+    radial-gradient(900px 480px at 12% -8%, rgba(59, 130, 246, 0.06), transparent 70%),
+    radial-gradient(700px 420px at 88% 4%, rgba(16, 185, 129, 0.05), transparent 72%);
+  background-attachment: fixed;
+  background-repeat: no-repeat;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  /* Inter 的可变字重下开启连字与表格数字，表格/计数对齐更整齐 */
+  font-feature-settings: 'cv02', 'cv03', 'cv04', 'tnum';
+  text-rendering: optimizeLegibility;
+}
+
+h1,
+h2,
+h3,
+h4,
+h5,
+h6 {
+  margin: 0;
+  font-weight: 600;
+  line-height: var(--leading-tight);
+  color: var(--color-foreground);
+  letter-spacing: -0.015em;
+}
+
+p {
+  margin: 0;
+}
+
+a {
+  color: var(--color-accent);
+  text-decoration: none;
+  transition: color var(--transition-fast);
+}
+
+a:hover {
+  color: var(--color-accent-hover);
+}
+
+/* 键盘焦点必须可见（可访问性硬性要求，禁止移除 outline 而不给替代） */
+:focus-visible {
+  outline: 2px solid var(--color-ring);
+  outline-offset: 2px;
+  border-radius: var(--radius-sm);
+}
+
+code,
+kbd,
+pre,
+samp {
+  font-family: var(--font-mono);
+}
+
+/* 可点击元素一律给手型光标 */
+button,
+[role='button'],
+.el-button,
+a,
+summary {
+  cursor: pointer;
+}
+
+/* 文字选中色：默认的选区蓝在暗底上会盖住文字，换成低透明度版本 */
+::selection {
+  color: var(--color-foreground);
+  background: rgba(59, 130, 246, 0.35);
+}
+
+/* 自定义滚动条（暗色下调色，默认滚动条在深色背景上很扎眼） */
+::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background: var(--color-border);
+  border-radius: var(--radius-full);
+  border: 2px solid transparent;
+  background-clip: content-box;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: var(--color-secondary);
+  background-clip: content-box;
+}
+
+/* ---------- 通用布局工具类 ---------- */
+
+.container {
+  width: 100%;
+  max-width: var(--container-max);
+  margin: 0 auto;
+  padding: 0 var(--space-4);
+}
+
+.container-narrow {
+  width: 100%;
+  max-width: var(--container-narrow);
+  margin: 0 auto;
+  padding: 0 var(--space-4);
+}
+
+.card {
+  background: var(--color-card);
+  border: 1px solid var(--color-border-subtle);
+  border-radius: var(--radius-lg);
+}
+
+.text-muted {
+  color: var(--color-muted-foreground);
+  font-size: var(--text-sm);
+}
+
+.text-ellipsis {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* 多行截断（摘要用） */
+.line-clamp-2 {
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+.line-clamp-3 {
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  line-clamp: 3;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+/* ---------- 可复用的入场动效 ----------
+   列表项错峰淡入。全局定义一次，各页面按需引用 class 即可，
+   避免每个组件各写一遍 @keyframes。 */
+@keyframes fade-up {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+.anim-in {
+  animation: fade-up 420ms var(--ease-out) both;
+}
+
+/* 错峰延迟：配合 v-for 的 index 用（内联 style 设置 --i） */
+.anim-in[style*='--i'] {
+  animation-delay: calc(var(--i, 0) * 45ms);
+}

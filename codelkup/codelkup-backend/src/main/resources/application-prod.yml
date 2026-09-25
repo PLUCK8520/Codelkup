@@ -1,0 +1,23 @@
+# ============================================================
+# 生产环境配置
+# 所有敏感值必须通过环境变量注入，不得硬编码
+# ============================================================
+
+spring:
+  datasource:
+    password: ${DB_PASSWORD}      # 必填
+  flyway:
+    clean-disabled: true          # 生产环境禁止 clean
+
+mybatis-plus:
+  configuration:
+    log-impl: org.apache.ibatis.logging.nologging.NoLoggingImpl   # 生产不打印 SQL
+
+codelkup:
+  jwt:
+    secret: ${JWT_SECRET}         # 必填
+
+logging:
+  level:
+    root: WARN
+    com.codelkup: INFO

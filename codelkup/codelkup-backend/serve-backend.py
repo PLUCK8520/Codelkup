@@ -1,0 +1,49 @@
+# -*- coding: utf-8 -*-
+"""
+启动后端并保持运行（跨 Bash 命令存活）。
+
+为什么不用 `java -jar ... &`：本沙箱会把父 shell 退出时留下的后台进程回收掉，
+实测 Popen(detached) 启动的 java 也会在几十秒内消失。
+
+可行的做法是**让 Python 自己常驻**：Python 进程作为 java 的父进程一直活着，
+java 就不会被判定为孤儿进程。父 shell 退出后 Python 进程本身也可能被回收，
+所以用本脚本时应当配合 run_in_background。
+"""
+import subprocess, os, sys, time, urllib.request
+
+BACKEND = r"C:/Users/32519/Desktop/Codelkup/codelkup/codelkup-backend"
+LOG = os.path.join(BACKEND, "backend-run.log")
+
+env = dict(os.environ)
+env.pop("SERVER__PORT", None)   # 注入变量优先级高于 yml，必须剔除
+
+logf = open(LOG, "wb", buffering=0)
+proc = subprocess.Popen(
+    ["java", "-jar", "target/codelkup-backend-0.0.1-SNAPSHOT.jar"],
+    cwd=BACKEND, env=env,
+    stdout=logf, stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL,
+)
+print(f"[serve] java pid = {proc.pid}", flush=True)
+
+# 轮询就绪
+for i in range(60):
+    time.sleep(2)
+    if proc.poll() is not None:
+        print(f"[serve] java 已退出，code={proc.returncode}", flush=True)
+        sys.exit(1)
+    try:
+        with urllib.request.urlopen("http://localhost:8085/actuator/health", timeout=3) as r:
+            if r.status == 200:
+                print(f"[serve] READY after ~{i*2}s", flush=True)
+                break
+    except Exception:
+        pass
+else:
+    print("[serve] 超时未就绪", flush=True)
+    sys.exit(1)
+
+# 常驻：java 活着就一直陪着
+print("[serve] backend is up, holding...", flush=True)
+while proc.poll() is None:
+    time.sleep(5)
+print(f"[serve] java exited code={proc.returncode}", flush=True)

@@ -1,0 +1,18 @@
+# 构建产物与本地环境文件不进镜像上下文
+# （.dockerignore 不只是"省空间"——它同时避免把本地 jar、数据库密码等
+#   意外 COPY 进镜像里）
+target/
+uploads/
+*.log
+*.iml
+.idea/
+.vscode/
+
+# 验收/开发脚本不需要进镜像
+verify-sprint*.py
+smoke-search.py
+serve-backend.py
+*.bat
+
+# 文档
+README.md

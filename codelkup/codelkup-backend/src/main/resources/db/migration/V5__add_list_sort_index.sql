@@ -1,0 +1,47 @@
+-- ============================================================
+-- V5: 列表页排序索引（性能优化）
+-- 对应 DEV-DOC §10.2 查询优化 / Sprint 5.4 压测优化
+-- ============================================================
+--
+-- 【为什么要加这两个索引】
+--
+-- 压测数据（1 万行 t_post）暴露出的问题：
+--   帖子列表接口  吞吐 71 req/s，P95 = 187 ms
+--   而帖子详情接口 吞吐 549 req/s，P95 = 29 ms
+--   列表比详情慢 6 倍 —— 对一个"读多写少"的社区产品，列表才是主路径。
+--
+-- 用 EXPLAIN ANALYZE 定位到两处：
+--   ① count 查询：Index lookup on idx_status_time，实际扫 10025 行，19.9 ms
+--   ② 主查询：    Sort: p.is_top DESC, p.create_time DESC
+--                 → **filesort**，先读 10025 行再排序取 20 条，27.7 ms
+--
+-- 根因：原有索引 idx_status_time(status, create_time) **不包含 is_top**，
+--   而列表页的三种排序（见 PostServiceImpl.ORDER_BY_WHITELIST）**全部以
+--   `p.is_top DESC` 开头**：
+--       latest → p.is_top DESC, p.create_time DESC
+--       hot    → p.is_top DESC, p.score DESC, p.create_time DESC
+--       active → p.is_top DESC, p.last_active DESC
+--   索引列顺序与 ORDER BY 列顺序不一致，优化器就无法用索引完成排序，
+--   只能把候选行全部取出做 filesort。
+--
+-- 加索引后，ORDER BY 的前两列能被索引顺序直接满足，
+-- 配合 LIMIT 20 可以只读前 20 行就返回（"读 20 行"而不是"读 1 万行再排序"）。
+--
+-- 【为什么是两个索引而不是一个】
+--   两个查询模式的最左前缀不同，无法共用：
+--     全部板块：WHERE status = 1 ORDER BY is_top, create_time
+--     指定板块：WHERE board_id = ? AND status = 1 ORDER BY is_top, create_time
+--   索引只能按最左前缀匹配，所以必须各建一个。
+--
+-- 【为什么保留旧的 idx_status_time】
+--   它的最左列 status 仍能服务于"只按 status 过滤、不排序"的 count 统计。
+--   索引不是越多越好（每个索引都会拖慢写入），但这里是读多写少的列表场景，
+--   且 1 万行规模下多一个索引的写入代价可以忽略。
+--   真实大规模场景应重新评估 —— 这一点写在这里以免被当成"随手加的"。
+-- ============================================================
+
+-- 全部板块的列表：WHERE status=1 ORDER BY is_top DESC, create_time DESC
+CREATE INDEX idx_status_top_time ON t_post (status, is_top, create_time DESC);
+
+-- 指定板块的列表：WHERE board_id=? AND status=1 ORDER BY is_top DESC, create_time DESC
+CREATE INDEX idx_board_status_top_time ON t_post (board_id, status, is_top, create_time DESC);

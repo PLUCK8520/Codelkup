@@ -1,0 +1,33 @@
+{
+  // ⚠️ @vue/tsconfig@0.9.x 只提供三个文件：tsconfig.json / tsconfig.dom.json /
+  //    tsconfig.lib.json —— 早期版本里的 tsconfig.node.json 已被移除。
+  //    这里改为继承通用基座，再自行补上 Node 环境需要的东西。
+  "extends": "@vue/tsconfig/tsconfig.json",
+
+  // ⚠️ 2026-09-25 修复：这里原本包含 "src/types/**/*.d.ts"，导致 `npm run build`
+  //    （即 `vue-tsc -b`）必然失败 —— 而这是个长期潜伏的问题：
+  //    之前只单独跑过 `vue-tsc --noEmit` 与 `vite build`，两者各自都能过，
+  //    但拼起来的完整命令从没人执行过（vite build 不做类型检查）。
+  //
+  //    为什么包含它会炸：
+  //      src/types/components.d.ts 是 unplugin-vue-components 自动生成的，
+  //      内容形如 `CommentItem: typeof import('./../components/CommentItem.vue')`。
+  //      把它纳入 Node 项目后，编译器会顺藤摸瓜把**所有 .vue 组件**拉进这个项目；
+  //      而本项目继承的是 Node 基座（lib 只有 ES2023，没有 DOM，也没有 @/* 别名），
+  //      于是 .vue 里用到的 document / HTMLTextAreaElement / requestAnimationFrame
+  //      以及全部 @/ 别名导入统统报错，一次冒出几十条 TS2304 / TS2307 / TS6307。
+  //
+  //    正确的职责划分：
+  //      组件与自动导入的声明属于 **app 项目**（tsconfig.app.json 的 src/**/* 已覆盖）；
+  //      Node 项目只该管构建工具自身的配置。
+  "include": ["vite.config.ts", "env.d.ts"],
+  "compilerOptions": {
+    "composite": true,
+    "noEmit": true,
+    "tsBuildInfoFile": "./node_modules/.tmp/tsconfig.node.tsbuildinfo",
+
+    // Node 环境：vite.config.ts 里会用到 node:url / import.meta.url
+    "lib": ["ES2023"],
+    "types": ["node"]
+  }
+}

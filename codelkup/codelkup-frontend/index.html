@@ -1,0 +1,29 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+
+    <!--
+      theme-color：让移动端浏览器的地址栏跟随页面底色，避免默认的白色
+      在暗色页面上形成一条刺眼的亮边。
+    -->
+    <meta name="theme-color" content="#0b1220" />
+    <meta name="description" content="Codelkup —— 面向开发者的技术问答与讨论社区" />
+    <title>Codelkup · 开发者技术社区</title>
+
+    <!--
+      ⚠️ 2026-09-25 修订：这里原本通过 fonts.googleapis.com 加载
+         IBM Plex Sans / JetBrains Mono。该域名在中国大陆无法直接访问，
+         字体必然加载失败并静默回退到系统字体 —— 排版设计完全落空，
+         而且 preconnect 到一个不可达域名会白白拖慢首屏。
+
+         现在字体改为 npm 包自托管（见 src/main.ts 的 @fontsource 引入），
+         与站点同源加载，不依赖任何外部 CDN。
+    -->
+  </head>
+  <body>
+    <div id="app"></div>
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>

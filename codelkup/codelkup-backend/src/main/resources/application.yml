@@ -1,0 +1,138 @@
+# ========== 服务端口 ==========
+# ⚠️ 本机端口占用情况（2026-09-24 实测）：
+#   8080~8083  → 被 VMware 的 vmnat.exe（系统服务，PID 5896）占用
+#   65336      → 被 WorkBuddy 占用；且环境变量 SERVER__PORT=65336 会覆盖本配置
+#   8085       → 空闲，本项目使用
+# 若在其他机器运行，本项可被环境变量 SERVER_PORT 或启动参数 --server.port 覆盖。
+server:
+  port: ${SERVER_PORT:8085}
+  # 优雅停机：等待在途请求处理完再退出，避免计数落库/通知丢失
+  shutdown: graceful
+  tomcat:
+    threads:
+      max: 200
+      min-spare: 10
+    accept-count: 100
+    max-connections: 8192
+
+spring:
+  application:
+    name: codelkup
+
+  profiles:
+    active: dev
+
+  # ========== 数据源 ==========
+  datasource:
+    driver-class-name: com.mysql.cj.jdbc.Driver
+    # 注意：characterEncoding 需填 Java 字符集名 UTF-8，不能填 MySQL 的 utf8mb4
+    # （utf8mb4 是服务端字符集名，JDBC 不认，会抛 Unsupported character encoding）
+    url: jdbc:mysql://${DB_HOST:localhost}:${DB_PORT:3306}/${DB_NAME:codelkup}?useUnicode=true&characterEncoding=UTF-8&serverTimezone=Asia/Shanghai&useSSL=false&allowPublicKeyRetrieval=true&rewriteBatchedStatements=true
+    username: ${DB_USERNAME:codelkup}
+    password: ${DB_PASSWORD}
+    hikari:
+      minimum-idle: 5
+      maximum-pool-size: 20
+      connection-timeout: 30000
+      idle-timeout: 600000
+      max-lifetime: 1800000
+      connection-test-query: SELECT 1
+
+  # ========== Redis ==========
+  data:
+    redis:
+      host: ${REDIS_HOST:localhost}
+      port: ${REDIS_PORT:6379}
+      database: ${REDIS_DB:0}
+      timeout: 3000ms
+      lettuce:
+        pool:
+          max-active: 16
+          max-idle: 8
+          min-idle: 2
+          max-wait: 3000ms
+
+  # ========== MVC ==========
+  mvc:
+    # 让不存在的路径抛 NoHandlerFoundException，交由 GlobalExceptionHandler 处理，
+    # 否则会被兜底分支当成 500 系统错误（语义错误）
+    throw-exception-if-no-handler-found: true
+  web:
+    resources:
+      # 关闭默认的静态资源兜底 Handler，配合上一项使 NoHandlerFoundException 真正生效
+      add-mappings: false
+  # ========== Jackson ==========
+  jackson:
+    date-format: yyyy-MM-dd HH:mm:ss
+    time-zone: Asia/Shanghai
+    default-property-inclusion: non_null
+
+  # ========== 文件上传 ==========
+  servlet:
+    multipart:
+      max-file-size: 5MB
+      max-request-size: 10MB
+
+  # ========== Flyway ==========
+  flyway:
+    enabled: true
+    baseline-on-migrate: true
+    locations: classpath:db/migration
+    encoding: UTF-8
+    validate-on-migrate: true
+
+# ========== MyBatis-Plus ==========
+mybatis-plus:
+  mapper-locations: classpath*:/mapper/**/*.xml
+  type-aliases-package: com.codelkup.module
+  configuration:
+    map-underscore-to-camel-case: true
+    log-impl: org.apache.ibatis.logging.stdout.StdOutImpl   # dev 环境打印 SQL；prod 覆盖
+  global-config:
+    banner: false
+    db-config:
+      id-type: auto
+      logic-delete-field: deleted
+      logic-delete-value: 1
+      logic-not-delete-value: 0
+
+# ========== SpringDoc ==========
+springdoc:
+  api-docs:
+    path: /v3/api-docs
+  swagger-ui:
+    path: /swagger-ui.html
+    tags-sorter: alpha
+    operations-sorter: alpha
+
+# ========== Actuator ==========
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info
+  endpoint:
+    health:
+      show-details: when-authorized
+
+# ========== 业务自定义配置 ==========
+codelkup:
+  jwt:
+    # 生产环境必须通过环境变量覆盖；dev 环境在 application-dev.yml 中提供默认值
+    secret: ${JWT_SECRET}
+    access-token-ttl-seconds: ${JWT_ACCESS_TTL:1800}       # 30 分钟
+    refresh-token-ttl-seconds: ${JWT_REFRESH_TTL:604800}   # 7 天
+    issuer: codelkup
+  cors:
+    allowed-origins: ${CORS_ALLOWED_ORIGINS:http://localhost:5173}
+  upload:
+    # 上传文件的存储根目录（相对路径基于进程工作目录）
+    # ⚠️ 生产环境应指向独立的数据卷，不要放在代码目录下
+    root: ${UPLOAD_ROOT:./uploads}
+    # 对外访问前缀，需与 WebMvcConfig 的资源映射一致
+    url-prefix: /uploads
+
+logging:
+  level:
+    root: INFO
+    com.codelkup: DEBUG

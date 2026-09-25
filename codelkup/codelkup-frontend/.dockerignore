@@ -1,0 +1,19 @@
+# ⚠️ node_modules 必须排除，否则前端镜像构建必然失败：
+#    Dockerfile 里 `COPY . .` 会把**本机 Windows 平台的** node_modules
+#    覆盖掉容器内刚装好的 Linux 版依赖 —— esbuild/rollup 的原生二进制
+#    平台不匹配，构建时报 "You installed esbuild for another platform"。
+#    这不只是"体积变大"的问题，是直接构建不过。
+node_modules/
+dist/
+
+# 构建缓存与日志
+.vite/
+*.log
+
+# 编辑器
+.idea/
+.vscode/
+*.iml
+
+# 验收脚本不需要进镜像
+verify-sprint*.mjs
