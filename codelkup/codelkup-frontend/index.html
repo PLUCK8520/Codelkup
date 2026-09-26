@@ -10,6 +10,14 @@
     -->
     <meta name="theme-color" content="#0b1220" />
     <meta name="description" content="Codelkup —— 面向开发者的技术问答与讨论社区" />
+    <!--
+      站点图标：放在 public/ 下由 Vite 原样服务（/favicon.svg）。
+      ⚠️ 这里必须显式声明 —— 只把文件丢进 public 而不声明，浏览器会去请求
+         /favicon.ico（不存在 → 404），然后退回"上一个页面的图标"或空白，
+         表现为"标签页图标是别的项目的"（浏览器按同源缓存 favicon，很容易串）。
+    -->
+    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+    <link rel="apple-touch-icon" href="/favicon.svg" />
     <title>Codelkup · 开发者技术社区</title>
 
     <!--

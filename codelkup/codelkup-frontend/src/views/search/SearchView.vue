@@ -113,13 +113,14 @@ watch(
     <!-- ==================== 搜索框 ==================== -->
     <header class="search-head">
       <h1 class="page-title">搜索</h1>
+      <!-- 回车交给表单的隐式提交（input 在 form 内、且有 native-type=submit 的按钮）：
+           再单独绑 @keyup.enter 会让一次回车触发两次 onSubmit -->
       <form class="search-form" @submit.prevent="onSubmit">
         <el-input
           v-model="input"
           size="large"
           placeholder="搜索帖子标题与正文，支持中文关键词…"
           clearable
-          @keyup.enter="onSubmit"
         >
           <template #prefix>
             <svg

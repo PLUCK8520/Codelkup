@@ -35,6 +35,16 @@ export interface UserVO {
   level: number
   createTime: string
   lastActive?: string
+  /** 提问数（仅公开主页返回；自己看自己时为 undefined） */
+  askedCount?: number
+  /** 已采纳数 */
+  acceptedCount?: number
+  /**
+   * 采纳率（0~1 小数）。
+   * ⚠️ 可能是 `null`（一次都没提问过）—— 与"0%"语义不同，展示时要区分：
+   * null 显示「—」，0 才显示「0%」。
+   */
+  acceptRate?: number | null
 }
 
 /** 本人资料（含邮箱）—— 对应后端 CurrentUserVO */
@@ -75,6 +85,17 @@ export interface ProfileUpdateRequest {
   nickname?: string
   bio?: string
   techTags?: string
+}
+
+/**
+ * 修改密码请求 —— 对应后端 PasswordChangeRequest。
+ *
+ * 必须带原密码：改密是账号接管的最后一道闸门，只凭登录态就能改密码的话，
+ * 一枚被盗的 accessToken 就能把账号彻底锁成攻击者的。
+ */
+export interface PasswordChangeRequest {
+  oldPassword: string
+  newPassword: string
 }
 
 /* ==================== 内容 ==================== */
@@ -185,6 +206,11 @@ export interface PostQueryRequest {
   authorId?: number
   tagId?: number
   type?: number
+  /**
+   * 仅提问帖有效：true=已解决 false=待解决（对应后端 `solved`）。
+   * 后端在 `type !== 1` 时会忽略它，所以前端只在「待解决」标签下才传。
+   */
+  solved?: boolean
   /** latest=最新 | hot=热度 | active=最后活跃 */
   sort?: 'latest' | 'hot' | 'active'
   page?: number

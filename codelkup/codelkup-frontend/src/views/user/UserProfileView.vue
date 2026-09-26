@@ -13,6 +13,7 @@ import { userApi } from '@/api/user'
 import { followApi } from '@/api/social'
 import { useAuthStore } from '@/stores/auth'
 import UserAvatar from '@/components/UserAvatar.vue'
+import LevelBadge from '@/components/LevelBadge.vue'
 import PostCard from '@/components/PostCard.vue'
 import PostListSkeleton from '@/components/PostListSkeleton.vue'
 import EmptyState from '@/components/EmptyState.vue'
@@ -50,6 +51,29 @@ const techTags = computed(() =>
     .map((s) => s.trim())
     .filter(Boolean),
 )
+
+/**
+ * 采纳率展示（M2-14 后端算好，前端只负责格式化）。
+ *
+ * ⚠️ 三态要分清：
+ *  - undefined（自己看自己 / 老数据）→ 「—」
+ *  - null（一次都没提问过）→ 「—」
+ *  - 0（提问过但一条没采纳）→ 「0%」
+ * 把前两者显示成 0% 会冤枉人。
+ */
+const acceptRateText = computed(() => {
+  const rate = user.value?.acceptRate
+  if (rate === null || rate === undefined) return '—'
+  return `${Math.round(rate * 100)}%`
+})
+
+const acceptRateTitle = computed(() => {
+  const u = user.value
+  if (!u || u.acceptedCount === undefined || u.askedCount === undefined) {
+    return '采纳率 = 已采纳的提问数 / 总提问数'
+  }
+  return `已采纳 ${u.acceptedCount} / 提问 ${u.askedCount}`
+})
 
 async function loadUser() {
   loadingUser.value = true
@@ -167,6 +191,9 @@ function changePage(p: number) {
         <div class="profile-info">
           <div class="profile-name-row">
             <h1 class="profile-name">{{ user.nickname }}</h1>
+            <!-- 等级徽章：与 stat 里的"Lv.N"同源（UserVO.level），这里放在昵称旁是身份标识，
+                 stat 里那格给的是数值上下文（声望 + 等级一起看） -->
+            <LevelBadge :level="user.level" :reputation="user.reputation" />
             <span v-if="user.role === 2" class="role-badge role-admin">管理员</span>
             <span v-else-if="user.role === 1" class="role-badge role-mod">版主</span>
             <span v-if="isSelf" class="role-badge role-self">这是你</span>
@@ -199,6 +226,12 @@ function changePage(p: number) {
             <div class="stat">
               <span class="stat-num">{{ formatCount(total) }}</span>
               <span class="stat-label">发帖</span>
+            </div>
+            <!-- 采纳率：没提问过时显示「—」而不是 0%（"没有数据"与"真的很差"是两回事）。
+                 title 里给出原始分子分母，避免用户对着一个百分数猜口径。 -->
+            <div class="stat" :title="acceptRateTitle">
+              <span class="stat-num">{{ acceptRateText }}</span>
+              <span class="stat-label">采纳率</span>
             </div>
             <div class="stat">
               <span class="stat-num">{{ formatRelativeTime(user.createTime) }}</span>
@@ -299,15 +332,15 @@ function changePage(p: number) {
 }
 
 .role-admin {
-  color: #fca5a5;
-  background: rgba(244, 63, 94, 0.18);
-  border: 1px solid rgba(244, 63, 94, 0.4);
+  color: var(--color-destructive);
+  background: var(--color-danger-soft);
+  border: 1px solid var(--color-danger-border);
 }
 
 .role-mod {
-  color: #93c5fd;
-  background: rgba(59, 130, 246, 0.18);
-  border: 1px solid rgba(59, 130, 246, 0.4);
+  color: var(--color-accent);
+  background: var(--color-accent-soft);
+  border: 1px solid var(--color-accent-border);
 }
 
 .role-self {

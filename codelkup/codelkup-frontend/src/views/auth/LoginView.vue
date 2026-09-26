@@ -100,16 +100,18 @@ async function onSubmit() {
             placeholder="请输入密码"
             autocomplete="current-password"
             show-password
-            @keyup.enter="onSubmit"
           />
         </el-form-item>
 
+        <!-- ⚠️ 按钮只保留 native-type="submit"（回车与点击都走表单的 @submit.prevent）：
+             此前同时写了 @click + 输入框 @keyup.enter + 表单 @submit.prevent，
+             一次点击会触发**两次** onSubmit → 两个登录请求、两条相同提示；
+             注册页同理，且会白白消耗两次注册限流额度。 -->
         <el-button
           type="primary"
           class="auth-submit"
           :loading="loading"
           native-type="submit"
-          @click="onSubmit"
         >
           登录
         </el-button>
@@ -130,7 +132,8 @@ async function onSubmit() {
   min-height: 100vh;
   padding: var(--space-6);
   background:
-    radial-gradient(900px 500px at 50% -10%, rgba(59, 130, 246, 0.14), transparent 70%),
+    /* ★ v4：删掉这里原有的页内径向光晕 —— 全站背景已经带了三处色彩斑，
+     再叠一层只会让玻璃卡片背后的颜色过曝；玻璃需要干净的色彩底衬。 */
     var(--color-background);
 }
 

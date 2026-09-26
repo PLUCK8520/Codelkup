@@ -289,15 +289,15 @@ async function onDelete() {
 }
 
 .c-badge-author {
-  color: #a5f3fc;
-  background: rgba(8, 145, 178, 0.18);
-  border: 1px solid rgba(8, 145, 178, 0.4);
+  color: var(--color-muted-foreground);
+  background: var(--color-neutral-soft);
+  border: 1px solid var(--color-border-hairline);
 }
 
 .c-badge-accepted {
-  color: #86efac;
-  background: rgba(16, 185, 129, 0.18);
-  border: 1px solid rgba(16, 185, 129, 0.4);
+  color: var(--color-success);
+  background: var(--color-success-soft);
+  border: 1px solid var(--color-success-border);
 }
 
 .c-time {
@@ -351,18 +351,18 @@ async function onDelete() {
 /* 已点赞：用品牌强调色，与"我点过"的状态一致 */
 .c-act.is-active {
   color: var(--color-accent);
-  background: rgba(59, 130, 246, 0.12);
-  border-color: rgba(59, 130, 246, 0.3);
+  background: var(--color-accent-soft);
+  border-color: var(--color-accent-border);
 }
 
 .c-act-accept {
   margin-left: auto;
-  color: #86efac;
+  color: var(--color-success);
 }
 
 .c-act-accept:hover:not(:disabled) {
-  color: #86efac;
-  background: rgba(16, 185, 129, 0.14);
+  color: var(--color-success);
+  background: var(--color-success-soft);
 }
 
 /* ---------- 被采纳的高亮 ---------- */

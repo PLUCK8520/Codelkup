@@ -70,14 +70,31 @@ export default defineConfig({
     ],
   },
   server: {
-    port: 5173,
+    // ⚠️ 端口刻意避开 5173：那是另一个项目常用的默认端口，两个项目同时开着会出现
+    //    "打开 localhost:5173 不知道是谁"的混乱；而且 favicon 是按**同源**缓存的，
+    //    同端口复用会让浏览器继续显示上一个项目缓存的图标。
+    //    strictPort = 端口被占时直接报错，而不是静默切到 5274 —— 静默切换比报错更难排查。
+    port: 5273,
+    strictPort: true,
     // 代理到后端 8085：前端用相对路径 /api 请求，开发期免去跨域配置
-    // ⚠️ 后端 CORS 白名单已放行 http://localhost:5173，直连也可以，
+    // ⚠️ 后端 CORS 白名单已放行 http://localhost:5273，直连也可以，
     //    但走代理能让前端代码在生产/开发环境保持一致（都用 /api）
     proxy: {
       '/api': {
         target: 'http://localhost:8085',
         changeOrigin: true,
+        // ⚠️ 必须把浏览器带的 Origin 一并处理掉，否则开发期会假跨域：
+        //    浏览器对 POST 一定会发 Origin: http://localhost:5273，而 changeOrigin 又把
+        //    Host 改写成 localhost:8085 —— 后端看到"Origin ≠ 请求自身来源"就按 CORS 处理，
+        //    一旦白名单没跟上端口（改端口后忘了同步配置/重打包），登录等写接口就集体 403
+        //    "Invalid CORS request"，而 GET 不带 Origin 所以看起来"只有登录坏了"（实测踩过）。
+        //    代理存在的意义就是让开发环境像生产一样同源（nginx 同源反代时浏览器根本不发 Origin），
+        //    所以这里把 Origin 去掉，让后端按普通同源请求处理。
+        configure: (proxy) => {
+          proxy.on('proxyReq', (proxyReq) => {
+            proxyReq.removeHeader('origin')
+          })
+        },
       },
       '/uploads': {
         target: 'http://localhost:8085',

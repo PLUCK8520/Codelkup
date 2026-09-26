@@ -114,7 +114,7 @@ async function onMarkAllRead() {
       await load()
     }
   } catch {
-    ElMessage.error('操作失败，请稍后重试')
+    // 错误提示由 request.ts 统一弹出，这里不重复提示
   }
 }
 
@@ -343,12 +343,18 @@ onMounted(async () => {
 }
 
 /* 不同类型给不同的低调配色，便于快速区分 */
-.type-1 { color: #93c5fd; background: rgba(59, 130, 246, 0.16); }
-.type-2 { color: #a5f3fc; background: rgba(8, 145, 178, 0.16); }
-.type-3 { color: #fda4af; background: rgba(225, 29, 72, 0.16); }
-.type-4 { color: #86efac; background: rgba(16, 185, 129, 0.16); }
-.type-5 { color: #fde68a; background: rgba(245, 158, 11, 0.16); }
-.type-6 { color: var(--color-subtle-foreground); background: var(--color-muted); }
+/* ★ v4：6 种通知类型原本配了 6 种高饱和色（青/红/绿/琥珀…）。
+   在玻璃底上这些色块会显得更杂，而颜色本该只承担"未读/已读"这一个语义 ——
+   类型差异交给图标与文案。统一为"单一强调色 + 低饱和底"。 */
+.type-1,
+.type-2,
+.type-3,
+.type-4,
+.type-5 {
+  color: var(--color-accent);
+  background: var(--color-accent-soft);
+}
+.type-6 { color: var(--color-subtle-foreground); background: var(--color-neutral-soft); }
 
 .item-body {
   display: flex;

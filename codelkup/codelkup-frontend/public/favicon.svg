@@ -1,0 +1,14 @@
+<!--
+  Codelkup 站点图标（favicon）。
+  图形与顶栏品牌标识同源：圆角方块 + 白色 </> 双尖括号。
+  用 SVG 而不是 ico/png：矢量、几行就能看懂，现代浏览器全支持；
+  底色取自设计令牌 --color-accent-solid(#2563eb)，改品牌色时这里要一起改。
+-->
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" role="img" aria-label="Codelkup">
+  <rect width="32" height="32" rx="8" fill="#2563eb" />
+  <g transform="translate(4 4)" fill="none" stroke="#ffffff" stroke-width="2.6"
+     stroke-linecap="round" stroke-linejoin="round">
+    <polyline points="16 18 22 12 16 6" />
+    <polyline points="8 6 2 12 8 18" />
+  </g>
+</svg>

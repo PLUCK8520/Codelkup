@@ -1,27 +1,34 @@
 /* ============================================================
    设计令牌（Design Tokens）
    来源：ui-ux-pro-max --design-system（Forum/Discussion Board + Dark Mode OLED）
+         + --domain typography「Modern Dark Cinema (Inter System)」（premium 方向）
 
-   ⚠️ 规则：组件里禁止写死十六进制色值，一律引用这里的 CSS 变量。
-      换主题/调色只需改这一处，不必全局搜索替换。
-
+   v3 修订（2026-09-25，用户第二次反馈"没有高级感"）
    ------------------------------------------------------------
-   2026-09-25 修订说明（视觉层级重做）
-   ------------------------------------------------------------
-   上一版的问题：primary / secondary / border / muted 全是同一族
-   slate 灰阶（#475569 / #64748B / #334155 / #1E293B），彼此色差极小，
-   于是整个界面呈现为"一片灰 + 一个蓝点缀"，卡片与背景几乎分不开，
-   视觉上扁平、廉价。本次修订做三件事：
+   v2 改的是"颜色与发光"（拉开表面层级、加 glow、双 emphasis 令牌），
+   但"高级感"主要不来自颜色。v3 换三条更根本的抓手：
 
-   1. **拉开表面层级**：背景更深、卡片更亮，让卡片真正"浮"起来
-      （旧值 background #0f172a vs card #111827 —— 亮度差不足 3%，
-       肉眼几乎无法区分，这是"平"的根因）
-   2. **让强调色有存在感**：accent 提亮 + 新增 soft/glow 两个派生令牌，
-      用于低调底色与发光，替代"到处描边"的旧做法
-   3. **补上设计系统要求的 Key Effects**：MASTER.md 写明
-      "Minimal glow (text-shadow 0 0 10px)"，上一版完全没有落地
+   1. **排版纪律**（最大项）。v2 的问题：
+      - 所有标题共用一句 `letter-spacing: -0.015em`，没有按层级区分字重/字距
+      - 缺少"小标签"这一档（大写 + 宽字距），于是计数、徽标、区段标题
+        全挤在同一档小字里，界面显得"糊"
+      Modern Dark Cinema 的配方是逐档给参数：
+        Display 700 / -0.03em ｜ H1-H2 600 / -0.016em ｜ 正文 400 / 0
+        标签 500 / +0.08em（大写）—— 见下方 --tracking-* 与 .label
 
-   对比度均按 WCAG AA（正文 4.5:1）校验。
+   2. **去掉"靠发光建立层级"**。v2 在卡片 hover、置顶卡、按钮上都挂了彩色
+      glow，暗色界面上大量彩色光晕读起来是"游戏 RGB 灯光"，不是"贵"。
+      v3 的层级顺序改为：**表面亮度差 → 1px 细边 → 顶部内高光 → 少量投影**，
+      彩色光晕只保留给品牌标识/首屏一处（--shadow-brand）。
+
+   3. **低饱和、少色相**。v2 的徽标用了蓝/琥珀/青三套高饱和底，
+      头像占位色是 8 个纯饱和色（正红、品红、紫……）—— 同一屏里出现 4~5 个
+      互不相关的饱和色，是廉价感最直接的来源。v3 收敛为：
+      徽标只用"低饱和底 + 同色系文字"，头像换成**低饱和 8 色**（白字对比度
+      7.3~8.9:1，见 .workbuddy/tools/wcag-contrast.py）。
+
+   ⚠️ 规则不变：组件里禁止写死色值，一律引用这里的 CSS 变量。
+   ⚠️ 改色后必须跑 `python .workbuddy/tools/wcag-contrast.py`（正文 ≥4.5:1）。
    ============================================================ */
 
 :root {
@@ -35,66 +42,112 @@
      ⚠️ 这里刻意分成「前景」与「实心底」两个令牌，不是冗余：
 
      --color-accent（#3b82f6）用于**前景**：链接、图标、强调文字、边框。
-       它需要与深色背景有足够对比 → 亮一些更好（卡片上 4.67:1 ✓）。
+       它需要与深色背景有足够对比 → 亮一些更好（卡片上 4.86:1 ✓）。
 
      --color-accent-solid（#2563eb）用于**实心按钮的底色**。
        白字压在上面必须 ≥4.5:1，而 #3b82f6 只有 3.68:1（不达标）。
        同一个色值不可能同时满足"深底上当文字要够亮"和"当底衬托白字要够暗"，
-       所以必须拆开。这是 WCAG 对比度算出来的结论，不是审美偏好。
-
-     旧版只用一个 #2563eb，做链接时偏暗、做按钮时刚好 —— 提亮后就顾此失彼。 */
-  --color-accent: #3b82f6;
-  --color-accent-hover: #60a5fa;
+       所以必须拆开。这是 WCAG 对比度算出来的结论，不是审美偏好。 */
+  --color-accent: #4d90f9;
+  --color-accent-hover: #7db0fd;
   --color-accent-solid: #2563eb;
   --color-accent-solid-hover: #1d4ed8;
   --color-on-accent: #ffffff;
-  /* 派生令牌：低饱和底色与发光。用它们替代大面积的实心色块与粗描边 */
-  --color-accent-soft: rgba(59, 130, 246, 0.12);
-  --color-accent-border: rgba(59, 130, 246, 0.35);
-  --color-accent-glow: rgba(59, 130, 246, 0.28);
+  /* 派生令牌：低饱和底色与描边。用它们替代大面积的实心色块与粗描边 */
+  --color-accent-soft: rgba(59, 130, 246, 0.10);
+  --color-accent-border: rgba(59, 130, 246, 0.28);
+  /* ⚠️ v3：彩光只允许用在品牌标识与首屏一处，不要挂在卡片/按钮上 */
+  --color-accent-glow: rgba(59, 130, 246, 0.22);
 
-  /* ---------- 表面（由深到浅，用于建立层级）----------
-     ★ 修订重点：三档之间的亮度差拉开到肉眼可辨。
-       旧值的三档（#0f172a / #111827 / #1e293b）几乎同色，
-       导致"卡片"和"页面底"分不出来，界面看起来是一整块。 */
-  --color-background: #0b1220; /* 页面底色（最深） */
-  --color-card: #121b2e; /* 卡片（明显亮于底色） */
-  --color-muted: #1a2540; /* 次级容器、输入框 */
-  --color-elevated: #202e4a; /* 浮层、下拉、弹窗 */
+  /* ---------- 表面（玻璃层叠，v4）----------
+     ★ v4 风格改版：从"纯色表面 + 亮度差"改为 glassmorphism（用户选定方向）。
+       来源：ui-ux-pro-max styles.csv 的 `glassmorphism` 条目 ——
+       "Translucent white rgba(255,255,255,0.1-0.3) + backdrop blur 10-20px
+        + 1px light border + layered depth"，checklist 要求
+       "Vibrant background verified"（背后必须有色彩，玻璃才看得见）。
+
+     ⚠️ 为什么直接把令牌换成半透明值，而不是逐个组件改：
+       全站有 57 处 `background: var(--color-card/elevated/muted)` 的引用，
+       改令牌等于一次性把它们全部变成玻璃层 —— 组件不必知道自己是玻璃。
+       模糊（backdrop-filter）没法做成颜色令牌，统一挂在下方 .glass 规则里。
+
+     ⚠️ 副作用必须知道：表面变亮 → 文字对比度必须重算。
+       见 `.workbuddy/tools/wcag-contrast.py`（已按"底色 + 色斑 + 玻璃"三层合成计算）。 */
+  --color-background: #06080f; /* 页面底色（最深） */
+  --color-card: rgba(255, 255, 255, 0.06); /* 玻璃层（卡片） */
+  --color-card-hover: rgba(255, 255, 255, 0.10); /* 玻璃层 hover */
+  --color-muted: rgba(255, 255, 255, 0.045); /* 次级容器、输入框 */
+  --color-elevated: rgba(255, 255, 255, 0.10); /* 浮层、下拉、弹窗 */
+  /* 粘性导航底：玻璃 + 模糊（与页面底色同源，避免色差横带） */
+  --surface-header: rgba(255, 255, 255, 0.05);
+
+  /* 玻璃的模糊与高光（供 .glass 规则与需要的组件引用） */
+  --glass-blur: blur(18px) saturate(150%);
+  --glass-border: rgba(255, 255, 255, 0.14);
+  --glass-highlight: inset 0 1px 0 rgba(255, 255, 255, 0.16);
 
   /* ---------- 文字 ----------
-     muted-foreground 从 #cbd5e1 降到 #a8b6cc：纯亮度堆太高会让
-     次要信息抢主标题的注意力，反而不显层次。
+     四档语义：主文字 / 次要（时间、计数）/ 弱化（占位符）/ 反色。
+     实测对比度（见 wcag-contrast.py）：主 15.9:1、次要 8.1:1、弱化 4.9:1。
+     ★ v3：改用 #eef2f8 而非纯白 —— 纯白在深色底上会"发光过曝"，
+       长时间阅读刺眼，也是廉价暗色主题的典型特征。 */
+  --color-foreground: #eef2f8; /* 主文字 */
+  --color-card-foreground: #eef2f8;
+  /* ★ v4：玻璃表面比原来的纯色卡片更亮，这两档为保住 4.5:1 而各提亮一档
+     （实测：次要 5.6:1、弱化 4.6:1，按"底色+色斑+玻璃"三层合成计算） */
+  --color-muted-foreground: #aab6c8; /* 次要文字：时间、计数 */
+  --color-subtle-foreground: #96a2b3; /* 更弱：占位符、禁用 */
 
-     subtle-foreground 定为 #7d8da8：上一版 #6b7d99 在卡片上只有
-     4.11:1，达不到 AA 正文标准（它是占位符/时间戳这类会被真实阅读的文字，
-     不算纯装饰）。#7d8da8 在卡片上 5.11:1，既达标又仍明显弱于正文。 */
-  --color-foreground: #f1f5f9; /* 主文字 */
-  --color-card-foreground: #f1f5f9;
-  --color-muted-foreground: #a8b6cc; /* 次要文字：时间、计数 */
-  --color-subtle-foreground: #7d8da8; /* 更弱：占位符、禁用 */
-
-  /* ---------- 边框与分隔 ---------- */
-  --color-border: #2a3a57;
-  --color-border-subtle: #1a2540;
+  /* ---------- 边框与分隔 ----------
+     ★ v4：玻璃层只能靠"1px 亮边"勾出轮廓（玻璃没有实体边界感），
+       所以边框透明度整体上调（0.06 → 0.12），并按材质给出 --glass-border。 */
+  --color-border-hairline: rgba(255, 255, 255, 0.12);
+  --color-border-subtle: rgba(255, 255, 255, 0.10);
+  --color-border: rgba(255, 255, 255, 0.16);
+  --color-border-strong: rgba(255, 255, 255, 0.24);
+  /* 玻璃顶边内高光：模拟光从上方打在玻璃的上边缘 */
+  --inset-highlight: inset 0 1px 0 rgba(255, 255, 255, 0.16);
 
   /* ---------- 语义色 ----------
-     destructive 从 #dc2626 换成品红系 #f43f5e：暗底上更醒目，
-     且与强调蓝形成明确的冷暖对立，警告不会"糊"在背景里。 */
-  --color-destructive: #f43f5e;
+     ★ v4：destructive 从 #f43f5e 提亮到 #fb7185 —— 玻璃表面变亮后，
+       原来的红只有 4.30:1（不达标）。注意区分两个用途：
+       - --color-destructive 用于**文字/图标**（要够亮，5.89:1 ✓）
+       - --el-color-danger 用于**实心按钮底**（要够暗，白字才压得住，4.90:1 ✓） */
+  --color-destructive: #fb7185;
   --color-on-destructive: #ffffff;
   --color-success: #10b981;
   --color-warning: #f59e0b;
   --color-ring: #60a5fa; /* 键盘焦点环：比 accent 再亮一档，确保可见 */
 
-  /* ---------- 搜索命中高亮（Sprint 4）----------
-     浏览器对 <mark> 的默认样式是"黄底黑字"，在暗色主题下既刺眼又与色板无关。
-     这里把它统一到强调色：低透明度蓝底 + 提亮的前景色。 */
-  --color-highlight-bg: rgba(59, 130, 246, 0.30);
+  /* ---------- 徽标用的低饱和底/边（v3 新增）----------
+     ⚠️ 提成令牌的强制理由：项目规矩是"组件里禁止写死色值（含 rgba()）"。
+     这三档是"精华""中性类型"两类徽标的专用色，出现在多个组件里，
+     写死在各自 <style> 中改一次要全局搜。 */
+  --color-warning-soft: rgba(245, 158, 11, 0.10);
+  --color-warning-border: rgba(245, 158, 11, 0.26);
+  --color-on-warning-soft: #e8c07d;
+  --color-neutral-soft: rgba(255, 255, 255, 0.035);
+  /* v4 补充：成功/危险也需要"低饱和底"，否则各页面会自己写 rgba
+     （之前通知页、个人主页、设置页就是这么散出 6 种色的） */
+  --color-success-soft: rgba(16, 185, 129, 0.14);
+  --color-success-border: rgba(16, 185, 129, 0.30);
+  --color-danger-soft: rgba(251, 113, 133, 0.14);
+  --color-danger-border: rgba(251, 113, 133, 0.30);
+
+  /* ---------- 代码块（v4）----------
+     玻璃底上代码块必须自己"再暗一层"，否则代码与正文分不开。
+     用半透明黑而不是实色：这样代码块下面的色彩斑仍能透出来一点，
+     与整体玻璃语言一致。 */
+  --code-bg: rgba(0, 0, 0, 0.32);
+  --code-bg-soft: rgba(0, 0, 0, 0.18);
+  --code-fg: #e6ecf7;
+  --code-keyword: #c4b5fd;
+
+  /* ---------- 搜索命中高亮（Sprint 4）---------- */
+  --color-highlight-bg: rgba(59, 130, 246, 0.26);
   --color-highlight-fg: #dbeafe;
 
-  /* ---------- 间距（4px 基准，等比数列）----------
-     ★ 所有 margin/padding/gap 都必须取自这里，不要出现魔法数字 */
+  /* ---------- 间距（4px 基准，等比数列）---------- */
   --space-1: 4px;
   --space-2: 8px;
   --space-3: 12px;
@@ -118,17 +171,35 @@
   /* ---------- 字体 ----------
      ★ 修订：原来指向 Google Fonts CDN（fonts.googleapis.com），
        该域名在中国大陆无法直接访问 —— 字体加载失败后静默回退到
-       系统字体，等于"设计时按 IBM Plex Sans 调的排版全部落空"，
-       用户看到的其实是 Windows 默认的 Segoe UI + 微软雅黑。
+       系统字体，等于"设计时按 IBM Plex Sans 调的排版全部落空"。
        现在改为 @fontsource 自托管（见 main.ts），不再依赖外部 CDN。
 
-     - Inter：拉丁字母与数字（设计系统推荐字体）
-     - 中文字形交给系统字体：中文 webfont 动辄数 MB，自托管不划算，
-       而 PingFang / 雅黑 / 思源的系统渲染质量本来就很好 */
+     - Inter：拉丁字母与数字
+     - 中文字形交给系统字体：中文 webfont 动辄数 MB，自托管不划算。
+       v3 把中文字体栈补全：macOS 优先苹方，Windows 优先微软雅黑，
+       中间给鸿蒙/思源/Noto 留位 —— 顺序即优先级，不要随意调换。 */
   --font-sans: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI',
-    'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', 'Noto Sans SC', sans-serif;
+    'PingFang SC', 'HarmonyOS Sans SC', 'Source Han Sans SC', 'Noto Sans SC',
+    'Microsoft YaHei', sans-serif;
   --font-mono: 'JetBrains Mono', 'SFMono-Regular', Consolas, 'Liberation Mono',
     Menlo, monospace;
+
+  /* ---------- 排版纪律（v3 新增）----------
+     ★ 这是 v3 提升"高级感"的核心：**按层级给字重与字距**，
+       而不是全站共用一句 letter-spacing。
+
+     Display 700 / -0.03em  → 只用于首屏大标题
+     Heading 600 / -0.016em → 区块标题、卡片标题
+     正文 400 / 0           → 段落（中文不需要负字距，会给"挤"的感觉）
+     Label   500 / +0.08em  → 计数、徽标、区段前缀（配合 .label 类，大写）
+
+     为什么负字距：拉丁字母在大字号下字间距显得松散，收一点更"紧致"；
+     而中文是方块字，负字距会让字挤在一起 —— 所以中文靠字号与行高拉层级，
+     拉丁数字靠字距。混排时用 `em` 而不是 `px`，随字号自动缩放。 */
+  --tracking-display: -0.03em;
+  --tracking-heading: -0.016em;
+  --tracking-body: 0;
+  --tracking-label: 0.08em;
 
   /* 字号：基准 16px，行高 1.5（可访问性下限） */
   --text-xs: 12px;
@@ -147,25 +218,27 @@
   --leading-relaxed: 1.75;
 
   /* ---------- 阴影 ----------
-     暗色主题下"阴影"的可见度天然很低（黑压黑），
-     所以这里同时准备了 glow 系列：用色光替代投影来表达层级与焦点。 */
-  --shadow-sm: 0 1px 3px rgba(0, 0, 0, 0.45);
-  --shadow-md: 0 6px 20px rgba(0, 0, 0, 0.5);
-  --shadow-lg: 0 16px 40px rgba(0, 0, 0, 0.6);
-  --shadow-glow: 0 0 0 1px var(--color-accent-border), 0 10px 36px -8px var(--color-accent-glow);
-  --shadow-glow-sm: 0 0 0 1px var(--color-accent-border), 0 4px 18px -6px var(--color-accent-glow);
+     ★ v3 修订：暗色界面里"黑压黑的投影"几乎不可见，v2 因此改用彩色 glow ——
+       但彩色 glow 挂在卡片/按钮上会显得廉价（像 RGB 灯效）。
+       v3 的正确顺序是：表面亮度差 > 1px 细边 > 顶部内高光 > 极少量投影。
+       投影只用在**真正浮起来**的元素（下拉、弹窗、悬停卡片）。 */
+  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.4);
+  --shadow-md: 0 8px 24px -12px rgba(0, 0, 0, 0.7);
+  --shadow-lg: 0 18px 48px -16px rgba(0, 0, 0, 0.8);
+  /* 悬停浮起：投影 + 顶部内高光一起用，才像"一张纸抬起来" */
+  --shadow-lift: var(--inset-highlight), 0 10px 30px -14px rgba(0, 0, 0, 0.75);
+  /* 品牌光晕：**只**用于品牌标识与首屏标题，不要挂到功能性元素上 */
+  --shadow-brand: 0 0 0 1px var(--color-accent-border), 0 12px 40px -12px var(--color-accent-glow);
 
   /* ---------- 容器宽度 ---------- */
   --container-max: 1200px;
   --container-narrow: 860px; /* 详情页正文区，过宽会降低可读性 */
 
   /* ---------- 动效 ----------
-     ★ 修订：旧版所有过渡统一用 `ease`，动作"发木"。
-       这里引入三条曲线，按语义区分：
-       - fast/base/slow：时长（保持 150-300ms 的交互反馈区间）
-       - ease-out：进入与位移（快出慢收，最自然）
-       - ease-spring：需要一点"回弹感"的强调动作（如点赞）
-       - ease-in-out：颜色/透明度这类对称变化 */
+     - fast/base/slow：时长（保持 150-300ms 的交互反馈区间）
+     - ease-out：进入与位移（快出慢收，最自然）
+     - ease-spring：需要一点"回弹感"的强调动作（如点赞）
+     - ease-in-out：颜色/透明度这类对称变化 */
   --transition-fast: 150ms cubic-bezier(0.4, 0, 0.2, 1);
   --transition-base: 220ms cubic-bezier(0.4, 0, 0.2, 1);
   --transition-slow: 320ms cubic-bezier(0.4, 0, 0.2, 1);
@@ -187,13 +260,13 @@
 
 /* ============================================================
    Element Plus 暗色变量覆写
-   Element Plus 默认是亮色主题，通过覆写它的 CSS 变量接入我们的色板
+   ★ v3 加强：Element 的默认观感（4px 小圆角、32px 矮控件、
+     实色边框、自带投影）就是"后台管理模板"味的来源。这里逐项改成
+     我们自己的形态：8px 圆角、36px 控件、发丝边、无自带投影。
    ============================================================ */
 :root {
   /* ⚠️ 用 accent-solid（#2563eb）而不是 accent（#3b82f6）：
-     Element 的主色绝大多数场景是**实心按钮底**，白字压其上必须 ≥4.5:1。
-     #3b82f6 + 白字只有 3.68:1（不达标），#2563eb + 白字是 5.17:1 ✓。
-     我们自己写的链接/图标则用 --color-accent，两者互不干扰。 */
+     Element 的主色绝大多数场景是**实心按钮底**，白字压其上必须 ≥4.5:1。 */
   --el-color-primary: var(--color-accent-solid);
   --el-color-primary-light-3: #60a5fa;
   --el-color-primary-light-5: #93c5fd;
@@ -201,10 +274,15 @@
   --el-color-primary-light-8: #dbeafe;
   --el-color-primary-light-9: #14264a;
   --el-color-primary-dark-2: var(--color-accent-hover);
+  /* Element 的 danger 默认是 #f56c6c（白字只有 3.2:1）。这里换成更深的一档，
+     保证"删除"这类实心按钮上的白字达标（4.90:1） */
+  --el-color-danger: #dc2626;
 
   --el-bg-color: var(--color-card);
   --el-bg-color-page: var(--color-background);
-  --el-bg-color-overlay: var(--color-elevated);
+  /* ⚠️ v4：下拉/弹窗**不用**半透明令牌，改用"近乎不透明 + 模糊"——
+     浮层是交互落点，可读性优先于通透感。模糊 + 玻璃边仍然保留玻璃观感。 */
+  --el-bg-color-overlay: rgba(16, 20, 32, 0.9);
 
   --el-text-color-primary: var(--color-foreground);
   --el-text-color-regular: var(--color-muted-foreground);
@@ -216,7 +294,21 @@
   --el-border-color-lighter: var(--color-border-subtle);
   --el-fill-color-blank: var(--color-card);
 
-  --el-mask-color: rgba(11, 18, 32, 0.82);
+  --el-mask-color: rgba(10, 14, 23, 0.82);
+
+  /* ---- v3：形态与投影 ---- */
+  --el-border-radius-base: 8px;
+  --el-border-radius-small: 6px;
+  --el-border-radius-round: 9999px;
+  /* 控件高度：默认 32px 在桌面端偏矮，配合我们的行高会显得局促 */
+  --el-component-size: 36px;
+  --el-component-size-large: 42px;
+  --el-component-size-small: 30px;
+  /* 关掉 Element 自带的悬浮投影：它在暗色底上只会糊出一团脏影 */
+  --el-box-shadow: var(--shadow-md);
+  --el-box-shadow-light: var(--shadow-sm);
+  --el-box-shadow-lighter: var(--shadow-sm);
+  --el-box-shadow-dark: var(--shadow-md);
 }
 
 /* ============================================================
@@ -239,14 +331,18 @@ body {
   font-size: var(--text-base);
   line-height: var(--leading-normal);
   color: var(--color-foreground);
-  /* ★ 关键改动：单一纯色背景 → 叠加两处极淡的径向光晕。
-     纯色暗底在 27 寸屏上会显得"空且平"，光晕给了纵深，
-     同时把视线引向页面中上部（内容区）。透明度压得很低（6%/5%），
-     只在余光里起作用，不会干扰阅读。 */
+  /* ★ v4 玻璃层叠：背景必须带色彩，玻璃才"看得见" —— 这是 glassmorphism 条目的
+     硬前提（checklist: "Vibrant background verified"）。纯黑底上放半透明白卡
+     等于什么都没有，只会变成"灰一点的黑"。
+     做法：深底 + 三处大范围低透明色彩斑（靛蓝 / 紫 / 青），全部 fixed 固定在视口，
+     内容滚动时光斑不动 → 卡片背后的色彩缓慢变化，磨砂感最明显。
+     ⚠️ 透明度刻意压得低（0.16/0.12/0.08）：它们只是"底衬"，不是主角；
+        调高会直接压垮文字对比度（见 wcag-contrast.py 的三层合成计算）。 */
   background-color: var(--color-background);
   background-image:
-    radial-gradient(900px 480px at 12% -8%, rgba(59, 130, 246, 0.06), transparent 70%),
-    radial-gradient(700px 420px at 88% 4%, rgba(16, 185, 129, 0.05), transparent 72%);
+    radial-gradient(900px 620px at 8% -6%, rgba(37, 99, 235, 0.16), transparent 62%),
+    radial-gradient(820px 560px at 96% 6%, rgba(124, 58, 237, 0.12), transparent 64%),
+    radial-gradient(760px 520px at 46% 104%, rgba(6, 182, 212, 0.08), transparent 66%);
   background-attachment: fixed;
   background-repeat: no-repeat;
   -webkit-font-smoothing: antialiased;
@@ -264,9 +360,11 @@ h5,
 h6 {
   margin: 0;
   font-weight: 600;
+  letter-spacing: var(--tracking-heading);
   line-height: var(--leading-tight);
   color: var(--color-foreground);
-  letter-spacing: -0.015em;
+  /* 中文标题不需要"挤压感"，字距用变量控制，便于按语言覆盖 */
+  text-wrap: balance; /* 多行标题自动均衡断行，避免孤字 */
 }
 
 p {
@@ -283,11 +381,14 @@ a:hover {
   color: var(--color-accent-hover);
 }
 
-/* 键盘焦点必须可见（可访问性硬性要求，禁止移除 outline 而不给替代） */
+/* 键盘焦点必须可见（可访问性硬性要求，禁止移除 outline 而不给替代）
+   ⚠️ 这里**不要**写 border-radius：`outline` 本来就会自动跟随元素自身的圆角，
+      而强制圆角会当场改掉组件的形状 —— 本规则曾带 `border-radius: var(--radius-sm)`
+      （为按钮设的 6px），副作用是所有可聚焦卡片一聚焦圆角就从 14px 缩到 6px，
+      视觉上像"跳了一下"。V0.4 做板块页焦点态时发现并删除。 */
 :focus-visible {
   outline: 2px solid var(--color-ring);
   outline-offset: 2px;
-  border-radius: var(--radius-sm);
 }
 
 code,
@@ -295,6 +396,7 @@ kbd,
 pre,
 samp {
   font-family: var(--font-mono);
+  font-feature-settings: 'liga' 0; /* 代码里不要连字，`!=` 要看得清 */
 }
 
 /* 可点击元素一律给手型光标 */
@@ -309,7 +411,7 @@ summary {
 /* 文字选中色：默认的选区蓝在暗底上会盖住文字，换成低透明度版本 */
 ::selection {
   color: var(--color-foreground);
-  background: rgba(59, 130, 246, 0.35);
+  background: rgba(59, 130, 246, 0.32);
 }
 
 /* 自定义滚动条（暗色下调色，默认滚动条在深色背景上很扎眼） */
@@ -334,6 +436,35 @@ summary {
   background-clip: content-box;
 }
 
+/* ============================================================
+   通用排版与布局类（v3 新增）
+   ------------------------------------------------------------
+   把"逐档给参数"的排版纪律固化成可复用类，避免每个组件各写一套。
+   ============================================================ */
+
+/* 首屏/品牌大标题：大字号 + 紧字距 + 白色→70% 白的渐变（Modern Dark Cinema 配方） */
+.display {
+  font-size: var(--text-4xl);
+  font-weight: 700;
+  letter-spacing: var(--tracking-display);
+  line-height: 1.12;
+  background: linear-gradient(180deg, #ffffff 0%, rgba(255, 255, 255, 0.72) 100%);
+  -webkit-background-clip: text;
+  background-clip: text;
+  -webkit-text-fill-color: transparent;
+  color: var(--color-foreground); /* 渐变不可用时的兜底 */
+}
+
+/* 小标签：计数、徽标、区段前缀 —— 大写 + 宽字距 + 弱化色。
+   中文没有大小写，靠"字距 + 弱化色 + 小字号"三件事拉开层级。 */
+.label {
+  font-size: var(--text-xs);
+  font-weight: 500;
+  letter-spacing: var(--tracking-label);
+  text-transform: uppercase;
+  color: var(--color-subtle-foreground);
+}
+
 /* ---------- 通用布局工具类 ---------- */
 
 .container {
@@ -350,10 +481,54 @@ summary {
   padding: 0 var(--space-4);
 }
 
+/* 卡片：玻璃（半透明底 + 亮边 + 顶边高光） */
 .card {
   background: var(--color-card);
-  border: 1px solid var(--color-border-subtle);
+  border: 1px solid var(--glass-border);
   border-radius: var(--radius-lg);
+  box-shadow: var(--glass-highlight);
+}
+
+/* ============================================================
+   玻璃层叠（v4）：模糊统一挂在这里
+   ------------------------------------------------------------
+   背景色可以直接做成令牌（--color-card），但 backdrop-filter 不行，
+   所以用一组显式规则把"面积大、且压在色彩底上"的容器变成磨砂玻璃。
+
+   ⚠️ 只给大容器加模糊，是有意的：blur 是 GPU 开销，徽标/标签/按钮
+      本来就叠在玻璃上，够清楚了，不必二次模糊。其它页面容器虽然没列进来，
+      但它们的底色已经是半透明令牌 —— 在没有模糊的降级情况下依然呈"彩色玻璃"
+      观感，只是磨砂感弱一点（低配机器上反而更流畅）。
+   ============================================================ */
+.card,
+.post-card,
+.hero,
+.app-header,
+.glass,
+/* 页面级玻璃面板（类名取自各视图/组件的真实选择器） */
+.comments,
+.profile-card,
+.profile-skeleton,
+.auth-card,
+.settings-card,
+.notification-item,
+.empty-card,
+.side-card,
+.skeleton-card,
+.hint-card,
+.md-editor,
+.md-preview,
+.editor-form,
+/* Element Plus 的浮层：不加模糊会像"贴上去的一块不透明板" */
+.el-popper,
+.el-select-dropdown,
+.el-dropdown__popper,
+.el-picker__popper,
+.el-popover,
+.el-message-box,
+.el-dialog {
+  backdrop-filter: var(--glass-blur);
+  -webkit-backdrop-filter: var(--glass-blur);
 }
 
 .text-muted {
@@ -385,8 +560,7 @@ summary {
 }
 
 /* ---------- 可复用的入场动效 ----------
-   列表项错峰淡入。全局定义一次，各页面按需引用 class 即可，
-   避免每个组件各写一遍 @keyframes。 */
+   列表项错峰淡入。全局定义一次，各页面按需引用 class 即可。 */
 @keyframes fade-up {
   from {
     opacity: 0;
@@ -398,8 +572,16 @@ summary {
   }
 }
 
+/* ⚠️ fill-mode 必须是 backwards，**不能**是 both。
+   both 会把动画结束态（`transform: none`）以"动画优先级"永久压在元素上，
+   而动画优先级**高于普通声明** —— 于是这些卡片自己的
+   `:hover { transform: translateY(...) }` 全部失效：背景、边框、阴影都变，
+   只有位移不动。这种"半死"的交互最难察觉（大屏上看像没浮起来）。
+   backwards 只补"错峰延迟期间"的起始态（这正是入场必需的），
+   动画结束后元素回到自身样式 → hover 位移恢复。
+   实测（V0.4）：`.post-card` 与 `.board-card` 的 hover 上移此前在全站都是死的。 */
 .anim-in {
-  animation: fade-up 420ms var(--ease-out) both;
+  animation: fade-up 420ms var(--ease-out) backwards;
 }
 
 /* 错峰延迟：配合 v-for 的 index 用（内联 style 设置 --i） */

@@ -237,6 +237,16 @@ async function onFeature(action: 'top' | 'featured') {
             <span v-if="post.isTop === 1" class="badge badge-pin">置顶</span>
             <span v-if="post.isFeatured === 1" class="badge badge-feature">精华</span>
             <span v-if="post.type === 1" class="badge badge-question">提问</span>
+            <!-- 提问的解决状态：靠 acceptedCommentId 判断（不是另存一个布尔字段，
+                 少一个可能与"采纳"动作不同步的状态） -->
+            <span v-if="post.type === 1 && post.acceptedCommentId" class="badge badge-solved">
+              <svg viewBox="0 0 24 24" width="11" height="11" fill="none" stroke="currentColor"
+                   stroke-width="3" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                <path d="M20 6 9 17l-5-5" />
+              </svg>
+              已解决
+            </span>
+            <span v-else-if="post.type === 1" class="badge badge-unsolved">待解决</span>
           </div>
 
           <h1 class="post-title">{{ post.title }}</h1>
@@ -478,20 +488,38 @@ async function onFeature(action: 'top' | 'featured') {
 }
 
 .badge-pin {
-  color: #fff;
+  color: var(--color-on-accent);
   background: var(--color-accent-solid);
 }
 
 .badge-feature {
-  color: #fde68a;
-  background: rgba(245, 158, 11, 0.18);
-  border: 1px solid rgba(245, 158, 11, 0.4);
+  color: var(--color-on-warning-soft);
+  background: var(--color-warning-soft);
+  border: 1px solid var(--color-warning-border);
 }
 
 .badge-question {
-  color: #a5f3fc;
-  background: rgba(8, 145, 178, 0.18);
-  border: 1px solid rgba(8, 145, 178, 0.4);
+  color: var(--color-muted-foreground);
+  background: var(--color-neutral-soft);
+  border: 1px solid var(--color-border-hairline);
+}
+
+/* 提问的解决状态：绿=有答案了，橙=还等人答。
+   两个徽标都用"柔和底 + 同色描边"，与置顶/精华的视觉重量保持一致，
+   不靠高饱和底色抢标题的注意力。 */
+.badge-solved {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  color: var(--color-success);
+  background: var(--color-success-soft);
+  border: 1px solid var(--color-success-border);
+}
+
+.badge-unsolved {
+  color: var(--color-warning);
+  background: var(--color-warning-soft);
+  border: 1px solid var(--color-warning-border);
 }
 
 .post-title {

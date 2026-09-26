@@ -66,8 +66,7 @@ async function onToggle() {
     emit('change', active.value)
     ElMessage.success(active.value ? '已关注' : '已取消关注')
   } catch {
-    active.value = previous // 失败回滚
-    ElMessage.error('操作失败，请稍后重试')
+    active.value = previous // 失败回滚；错误提示由 request.ts 统一弹出
   } finally {
     loading.value = false
   }

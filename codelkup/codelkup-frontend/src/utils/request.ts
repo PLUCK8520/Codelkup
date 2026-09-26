@@ -47,14 +47,36 @@ http.interceptors.request.use((config: InternalAxiosRequestConfig) => {
   return config
 })
 
-/* ==================== 401 自动刷新 ==================== */
+/* ==================== 凭证刷新 ==================== */
 /**
- * 并发 401 的处理：
- * 若多个请求同时收到 401，不能各自去刷新（refreshToken 是单槽位，
+ * 并发失效的处理：
+ * 若多个请求同时失效，不能各自去刷新（refreshToken 是单槽位，
  * 且刷新会轮换 token，并发刷新会互相把对方的新 token 顶掉）。
  * 因此用一个共享 Promise 把并发请求串起来，只刷新一次。
  */
 let refreshPromise: Promise<string> | null = null
+
+/**
+ * ⚠️ 触发刷新的判据必须是**业务码**，不能只看 HTTP 状态码。
+ *
+ * 本项目后端把业务失败也返回 HTTP 200 + code（见后端 SecurityHandlers），
+ * 凭证失效同样是 `200 + 40101/40102/40103`。此前这里只判 `status === 401`，
+ * 于是这条刷新链路**从不触发** —— token 一过期就直接表现为"未登录"，
+ * 而"401 并发刷新串行化"这段设计等于没生效。
+ *
+ * 40104（邮箱或密码错误）/40105（封禁）不在列表里：密码错不该去刷 token。
+ */
+const AUTH_EXPIRED_CODES = [40101, 40102, 40103]
+
+/** 登录 / 刷新接口自身的失败不触发刷新，否则会互相递归 */
+function isAuthEndpoint(url?: string): boolean {
+  return !!url && (url.includes('/auth/login') || url.includes('/auth/refresh'))
+}
+
+function isAuthExpired(body: unknown): boolean {
+  const code = (body as ApiResult<unknown> | undefined)?.code
+  return typeof code === 'number' && AUTH_EXPIRED_CODES.includes(code)
+}
 
 async function doRefresh(): Promise<string> {
   const refreshToken = tokenStorage.getRefresh()
@@ -75,45 +97,77 @@ async function doRefresh(): Promise<string> {
 }
 
 function forceLogout() {
-  tokenStorage.clear()
   // 用 replace 而非 href，避免用户点返回又回到需要登录的页面
   if (!location.pathname.startsWith('/login')) {
     location.replace('/login?redirect=' + encodeURIComponent(location.pathname))
   }
 }
 
+/**
+ * 凭证失效的收尾。
+ *
+ * ⚠️ 只有"本来登录着"（本地还存着 refreshToken）才跳登录页：
+ * 游客访问公开接口时也可能拿不到凭证，若一律重定向，
+ * 未登录用户打开首页就会被弹到 /login。
+ */
+function onAuthExpired() {
+  const wasLoggedIn = !!tokenStorage.getRefresh()
+  tokenStorage.clear()
+  if (wasLoggedIn) {
+    forceLogout()
+  }
+}
+
+/**
+ * 用 refreshToken 换新 accessToken 并**重放**原请求。
+ *
+ * @returns 重放成功的响应；无法刷新（无 refreshToken / 刷新失败 / 已重试过）返回 null
+ */
+async function refreshAndReplay(
+  config: InternalAxiosRequestConfig & { _retried?: boolean },
+): Promise<AxiosResponse | null> {
+  if (config._retried || !tokenStorage.getRefresh()) {
+    return null
+  }
+  config._retried = true
+  try {
+    refreshPromise = refreshPromise ?? doRefresh()
+    const newToken = await refreshPromise
+    refreshPromise = null
+    config.headers.Authorization = `Bearer ${newToken}`
+    return await http.request(config)
+  } catch {
+    refreshPromise = null
+    return null
+  }
+}
+
 http.interceptors.response.use(
-  (response: AxiosResponse) => response,
+  // ---- 成功分支：HTTP 200 也可能是"凭证失效"（业务码 401xx）----
+  async (response: AxiosResponse) => {
+    const config = response.config as InternalAxiosRequestConfig & { _retried?: boolean }
+
+    if (isAuthExpired(response.data) && !isAuthEndpoint(config.url)) {
+      const replayed = await refreshAndReplay(config)
+      if (replayed) {
+        return replayed
+      }
+      onAuthExpired()
+    }
+
+    return response
+  },
+  // ---- 失败分支：HTTP 层错误（网关/直连等返回真实 401 时走这里，逻辑同上）----
   async (error) => {
     const { response, config } = error
-    const originalRequest = config as AxiosRequestConfig & { _retried?: boolean }
+    const originalRequest = config as InternalAxiosRequestConfig & { _retried?: boolean }
 
-    // ---- 401：尝试刷新一次 ----
-    if (response?.status === 401 && !originalRequest._retried) {
-      originalRequest._retried = true
-
-      // 登录/刷新接口自身返回 401，说明凭证就是错的，直接登出
-      const url: string = originalRequest.url || ''
-      if (url.includes('/auth/login') || url.includes('/auth/refresh')) {
-        forceLogout()
-        return Promise.reject(error)
+    if (response?.status === 401 && !isAuthEndpoint(originalRequest.url)) {
+      const replayed = await refreshAndReplay(originalRequest)
+      if (replayed) {
+        return replayed
       }
-
-      try {
-        refreshPromise = refreshPromise ?? doRefresh()
-        const newToken = await refreshPromise
-        refreshPromise = null
-
-        originalRequest.headers = {
-          ...originalRequest.headers,
-          Authorization: `Bearer ${newToken}`,
-        }
-        return http.request(originalRequest)
-      } catch {
-        refreshPromise = null
-        forceLogout()
-        return Promise.reject(error)
-      }
+      onAuthExpired()
     }
 
     // ---- 其余错误统一提示 ----
@@ -152,6 +206,17 @@ export async function request<T>(config: AxiosRequestConfig): Promise<T> {
   if (body.code !== 0) {
     const err = new Error(body.message || '请求失败') as Error & { code?: number }
     err.code = body.code
+
+    // ⚠️ 业务失败必须在这里提示，不能指望 axios 的失败分支：
+    //    后端约定"业务失败也返回 HTTP 200 + code"（见 SecurityHandlers），
+    //    那条失败分支永远不会走到 —— 不在这里弹，用户看到的就是"点了没反应"。
+    //    实测踩过：密码输错登录、改密时原密码填错，界面都毫无反馈
+    //    （更糟的是各处 catch 里都写着"拦截器已统一提示"，于是谁也没提示）。
+    //    只有凭证失效的 40101/40102/40103 除外 —— 它们由上面的刷新/跳登录流程统一处理，
+    //    这里再弹一次就是重复打扰。
+    if (!isAuthExpired(body)) {
+      ElMessage.error(err.message)
+    }
     throw err
   }
   return body.data

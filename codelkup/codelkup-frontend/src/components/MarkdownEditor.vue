@@ -7,6 +7,7 @@
  * 发表后同样会被过滤，不会出现"预览正常、发布后变样"的落差。
  */
 import { computed, ref } from 'vue'
+import { useImagePaste } from '@/composables/useImagePaste'
 import MarkdownViewer from './MarkdownViewer.vue'
 
 const model = defineModel<string>({ default: '' })
@@ -16,7 +17,16 @@ const props = withDefaults(defineProps<{ placeholder?: string; minRows?: number 
   minRows: 16,
 })
 
-const emit = defineEmits<{ (e: 'update:modelValue', v: string): void }>()
+/**
+ * ⚠️ 不要在 textarea 上再写 `@input="emit('update:modelValue', model)"`。
+ *
+ * 这行曾经存在，看起来"更保险"，实际是重复上报同一次输入：
+ * v-model 自己就会在 input 时上报（`update:modelValue` 已由 defineModel 声明），
+ * 而多出来的那次读到的是**尚未更新**的旧值 —— 原生元素的 v-model 由
+ * vModelText 指令实现，赋值时机与模板上的 `@input` 监听器不是一回事，
+ * 最终哪个值生效取决于监听器注册顺序。一次输入被上报两次、其中一次是过期值，
+ * 属于"能跑但说不清"的写法，已删除，输入只经 v-model 一条路径。
+ */
 
 /** 移动端不并排显示预览，用 tab 切换 */
 const mobileTab = ref<'edit' | 'preview'>('edit')
@@ -26,22 +36,69 @@ const charCount = computed(() => model.value.length)
 /** 在光标处插入语法片段（工具栏按钮用） */
 const textareaRef = ref<HTMLTextAreaElement | null>(null)
 
+/**
+ * 在光标处插入原文（不包裹、不占位）—— 图片这样的"成品片段"用它。
+ * 有选区时用插入内容替换选区，这是所有编辑器的共同预期。
+ */
+function insertAtCursor(text: string) {
+  const el = textareaRef.value
+  if (!el) {
+    // 极端情况（组件未挂载出 textarea）：退化为追加，至少不丢内容
+    model.value += text
+    return
+  }
+
+  const start = el.selectionStart
+  const end = el.selectionEnd
+  model.value = model.value.slice(0, start) + text + model.value.slice(end)
+
+  // 光标落在插入内容之后，便于继续输入
+  requestAnimationFrame(() => {
+    el.focus()
+    el.setSelectionRange(start + text.length, start + text.length)
+  })
+}
+
 function insert(before: string, after = '', placeholder = '') {
   const el = textareaRef.value
   if (!el) return
 
-  const start = el.selectionStart
-  const end = el.selectionEnd
-  const selected = model.value.slice(start, end)
+  const selected = model.value.slice(el.selectionStart, el.selectionEnd)
   const inner = selected || placeholder
 
-  model.value = model.value.slice(0, start) + before + inner + after + model.value.slice(end)
+  insertAtCursor(before + inner + after)
 
-  // 恢复焦点并选中插入的内容，便于连续输入
+  // 选中刚插入的内容（而非光标落在末尾），便于连续输入
+  const start = el.selectionStart
+  const beforeLength = before.length
   requestAnimationFrame(() => {
-    el.focus()
-    el.setSelectionRange(start + before.length, start + before.length + inner.length)
+    el.setSelectionRange(start + beforeLength, start + beforeLength + inner.length)
   })
+}
+
+/* ==================== 图片（粘贴 / 选择） ==================== */
+
+const fileInputRef = ref<HTMLInputElement | null>(null)
+
+const {
+  uploading: imageUploading,
+  onPaste: onPasteImage,
+  uploadAndInsert: uploadImage,
+} = useImagePaste({ insert: insertAtCursor })
+
+/** 工具栏"插入图片"：打开文件选择器（移动端同样可用，比粘贴更可靠） */
+function pickImage() {
+  fileInputRef.value?.click()
+}
+
+async function onImagePicked(e: Event) {
+  const input = e.target as HTMLInputElement
+  const file = input.files?.[0]
+  // 先清空 input：否则连续选同一个文件不会再触发 change
+  input.value = ''
+  if (file) {
+    await uploadImage(file)
+  }
 }
 
 const TOOLBAR = [
@@ -71,6 +128,26 @@ const TOOLBAR = [
       >
         {{ tool.icon }}
       </button>
+
+      <!-- 插入图片：粘贴与选文件两条路都通（移动端没有粘贴板图片，只能选文件） -->
+      <button
+        type="button"
+        class="tool-btn"
+        :class="{ busy: imageUploading }"
+        :title="imageUploading ? '图片上传中…' : '插入图片（也可直接粘贴）'"
+        aria-label="插入图片"
+        :disabled="imageUploading"
+        @click="pickImage"
+      >
+        {{ imageUploading ? '…' : '🖼' }}
+      </button>
+      <input
+        ref="fileInputRef"
+        type="file"
+        accept="image/png,image/jpeg,image/webp"
+        class="file-input"
+        @change="onImagePicked"
+      />
 
       <span class="toolbar-spacer" />
 
@@ -103,7 +180,7 @@ const TOOLBAR = [
         :rows="props.minRows"
         :placeholder="props.placeholder"
         spellcheck="false"
-        @input="emit('update:modelValue', model)"
+        @paste="onPasteImage"
       />
 
       <div class="md-preview" :class="{ 'mobile-hidden': mobileTab !== 'preview' }">
@@ -153,6 +230,17 @@ const TOOLBAR = [
   color: var(--color-foreground);
   background: var(--color-elevated);
   border-color: var(--color-border);
+}
+
+/* 上传中的图片按钮：占位宽度不变，避免工具栏抖动 */
+.tool-btn.busy {
+  color: var(--color-accent);
+  cursor: progress;
+}
+
+/* 隐藏的文件选择器：用隐藏 input + 按钮触发，是为了让按钮能带 aria-label 与禁用态 */
+.file-input {
+  display: none;
 }
 
 .toolbar-spacer {

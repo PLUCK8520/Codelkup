@@ -186,13 +186,81 @@ function onReset() {
   form.techTags = original.techTags
   formRef.value?.clearValidate()
 }
+
+/* ==================== 修改密码 ==================== */
+const pwdFormRef = ref<FormInstance>()
+const changing = ref(false)
+const pwdForm = reactive({ oldPassword: '', newPassword: '', confirmPassword: '' })
+
+/** 与后端 PasswordChangeRequest 的约束对齐（8~32 位、字母 + 数字） */
+const PWD_MIN = 8
+const PWD_MAX = 32
+const PWD_PATTERN = /^(?=.*[A-Za-z])(?=.*\d).+$/
+
+const pwdRules: FormRules = {
+  oldPassword: [{ required: true, message: '请输入原密码', trigger: 'blur' }],
+  newPassword: [
+    { required: true, message: '请输入新密码', trigger: 'blur' },
+    { min: PWD_MIN, max: PWD_MAX, message: `密码需为 ${PWD_MIN}~${PWD_MAX} 位`, trigger: 'blur' },
+    { pattern: PWD_PATTERN, message: '密码需同时包含字母和数字', trigger: 'blur' },
+    {
+      // 新旧相同：后端也会拦（40001），前端提前提示能省一次往返
+      validator: (_rule: unknown, value: string, callback: (error?: Error) => void) => {
+        if (value && value === pwdForm.oldPassword) {
+          callback(new Error('新密码不能与原密码相同'))
+        } else {
+          callback()
+        }
+      },
+      trigger: 'blur',
+    },
+  ],
+  confirmPassword: [
+    { required: true, message: '请再次输入新密码', trigger: 'blur' },
+    {
+      validator: (_rule: unknown, value: string, callback: (error?: Error) => void) => {
+        if (value !== pwdForm.newPassword) {
+          callback(new Error('两次输入的新密码不一致'))
+        } else {
+          callback()
+        }
+      },
+      trigger: 'blur',
+    },
+  ],
+}
+
+async function onChangePassword() {
+  if (!pwdFormRef.value) return
+  const valid = await pwdFormRef.value.validate().catch(() => false)
+  if (!valid) return
+
+  changing.value = true
+  try {
+    await userApi.changePassword({
+      oldPassword: pwdForm.oldPassword,
+      newPassword: pwdForm.newPassword,
+    })
+    // 后端在返回成功之前就已拉黑当前 accessToken、清空 refresh 白名单，
+    // 所以这里必须主动本地登出 + 回登录页用新密码登录 ——
+    // 否则用户会停在一个"每个请求都 401"的页面上，看起来像功能坏了。
+    // （auth.logout() 对"后端调用失败"是容错的，这里即使 401 也能清干净本地状态）
+    await auth.logout()
+    ElMessage.success('密码已修改，请用新密码重新登录')
+    router.push({ name: 'login', query: { redirect: '/settings' } })
+  } catch {
+    // 拦截器已提示具体原因（如"原密码不正确"）
+  } finally {
+    changing.value = false
+  }
+}
 </script>
 
 <template>
   <div class="container-narrow settings-wrap">
     <header class="settings-head">
       <h1 class="settings-title">账号设置</h1>
-      <p class="settings-sub">管理你的公开资料与头像</p>
+      <p class="settings-sub">管理你的公开资料、头像与密码</p>
     </header>
 
     <!-- ==================== 头像 ==================== -->
@@ -288,6 +356,61 @@ function onReset() {
       </el-form>
     </section>
 
+    <!-- ==================== 修改密码 ==================== -->
+    <section class="settings-card">
+      <h2 class="card-title">修改密码</h2>
+
+      <el-form
+        ref="pwdFormRef"
+        :model="pwdForm"
+        :rules="pwdRules"
+        label-position="top"
+        class="settings-form"
+        @submit.prevent="onChangePassword"
+      >
+        <el-form-item label="原密码" prop="oldPassword">
+          <el-input
+            v-model="pwdForm.oldPassword"
+            type="password"
+            show-password
+            autocomplete="current-password"
+            placeholder="用于确认是本人操作"
+          />
+        </el-form-item>
+
+        <el-form-item label="新密码" prop="newPassword">
+          <el-input
+            v-model="pwdForm.newPassword"
+            type="password"
+            show-password
+            autocomplete="new-password"
+            :maxlength="PWD_MAX"
+            placeholder="8~32 位，需同时包含字母和数字"
+          />
+        </el-form-item>
+
+        <el-form-item label="确认新密码" prop="confirmPassword">
+          <el-input
+            v-model="pwdForm.confirmPassword"
+            type="password"
+            show-password
+            autocomplete="new-password"
+            :maxlength="PWD_MAX"
+            placeholder="再输入一次，避免打错"
+          />
+        </el-form-item>
+
+        <div class="form-actions pwd-actions">
+          <el-button type="primary" :loading="changing" @click="onChangePassword">
+            修改密码
+          </el-button>
+          <p class="field-hint pwd-hint">
+            修改成功后所有设备都会退出，需要用新密码重新登录。
+          </p>
+        </div>
+      </el-form>
+    </section>
+
     <!-- ==================== 账号信息 ==================== -->
     <section v-if="auth.user" class="settings-card">
       <h2 class="card-title">账号信息</h2>
@@ -303,8 +426,11 @@ function onReset() {
         <div class="info-row">
           <dt>账号状态</dt>
           <dd>
-            <span v-if="auth.user.status === 1" class="status status-ok">正常</span>
-            <span v-else class="status status-bad">已停用</span>
+            <!-- 状态语义来自后端 User：0 正常 / 1 禁言 / 2 封禁。
+                 ⚠️ 修正：原来写的是"status === 1 → 正常"，正好把"被禁言"显示成"正常"（枚举反了） -->
+            <span v-if="auth.user.status === 0 || auth.user.status == null" class="status status-ok">正常</span>
+            <span v-else-if="auth.user.status === 1" class="status status-warn">已禁言</span>
+            <span v-else class="status status-bad">已封禁</span>
           </dd>
         </div>
       </dl>
@@ -436,13 +562,28 @@ function onReset() {
 }
 
 .status-ok {
-  color: #86efac;
-  background: rgba(16, 185, 129, 0.18);
+  color: var(--color-success);
+  background: var(--color-success-soft);
 }
 
 .status-bad {
-  color: #fca5a5;
-  background: rgba(244, 63, 94, 0.18);
+  color: var(--color-destructive);
+  background: var(--color-danger-soft);
+}
+
+.status-warn {
+  color: var(--color-warning);
+  background: var(--color-warning-soft);
+}
+
+/* ---------- 修改密码 ---------- */
+.pwd-actions {
+  align-items: center;
+  flex-wrap: wrap;
+}
+
+.pwd-hint {
+  margin-top: 0;
 }
 
 @media (max-width: 640px) {

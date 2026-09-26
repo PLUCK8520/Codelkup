@@ -169,16 +169,15 @@ async function onSubmit() {
             placeholder="再次输入密码"
             autocomplete="new-password"
             show-password
-            @keyup.enter="onSubmit"
           />
         </el-form-item>
 
+        <!-- 只保留 native-type="submit"：与 LoginView 同因（重复绑定会让一次点击发两个请求） -->
         <el-button
           type="primary"
           class="auth-submit"
           :loading="loading"
           native-type="submit"
-          @click="onSubmit"
         >
           注册
         </el-button>
@@ -199,7 +198,7 @@ async function onSubmit() {
   min-height: 100vh;
   padding: var(--space-6);
   background:
-    radial-gradient(900px 500px at 50% -10%, rgba(59, 130, 246, 0.14), transparent 70%),
+    /* ★ v4：删掉页内径向光晕，改用全站统一的色彩底衬（玻璃需要它） */
     var(--color-background);
 }
 
