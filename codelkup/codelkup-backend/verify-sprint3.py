@@ -30,7 +30,7 @@ _opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
 results = []
 
 
-def call(method, path, body=None, token=None):
+def call(method, path, body=None, token=None, timeout=20):
     url = BASE + path
     data = None
     hdrs = {"Content-Type": "application/json"}
@@ -40,7 +40,7 @@ def call(method, path, body=None, token=None):
         hdrs["Authorization"] = "Bearer " + token
     req = urllib.request.Request(url, data=data, headers=hdrs, method=method)
     try:
-        with _opener.open(req, timeout=20) as resp:
+        with _opener.open(req, timeout=timeout) as resp:
             raw = resp.read()
             try:
                 return resp.status, json.loads(raw.decode("utf-8"))
@@ -443,11 +443,17 @@ def main():
         check("未登录触发重建被拒 (40101)", b.get("code") == 40101, b.get("code"))
 
         # 全量重建
-        st, b = call("POST", "/api/admin/counters/rebuild", token=token_a)
-        check("全量重建接口可用", b.get("code") == 0, b.get("code"))
+        # ⚠️ 单独放宽超时：库里已灌入 1 万行压测数据（.workbuddy/tools/gen-perf-data.py），
+        #    全量重建要逐帖反查明细表计数，默认 20s 扛不住 —— 超时后 call() 返回的是
+        #    错误字符串，脚本会直接崩在 b.get() 上（AttributeError）而看不出真因。
+        st, b = call("POST", "/api/admin/counters/rebuild", token=token_a, timeout=240)
+        check("全量重建接口可用",
+              isinstance(b, dict) and b.get("code") == 0,
+              b.get("code") if isinstance(b, dict) else b)
         check("全量重建报告含扫描总数",
-              isinstance(b["data"].get("totalPosts"), int) and b["data"]["totalPosts"] >= 3,
-              b["data"].get("totalPosts"))
+              isinstance(b, dict) and isinstance((b.get("data") or {}).get("totalPosts"), int)
+              and b["data"]["totalPosts"] >= 3,
+              (b.get("data") or {}).get("totalPosts") if isinstance(b, dict) else b)
 
         # 全量重建后所有帖子计数都与明细表一致（抽样检查前 5 篇）
         st, b = call("GET", "/api/posts?size=5")

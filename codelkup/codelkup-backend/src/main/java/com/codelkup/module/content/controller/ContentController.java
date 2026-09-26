@@ -1,5 +1,7 @@
 package com.codelkup.module.content.controller;
 
+import com.codelkup.common.exception.BusinessException;
+import com.codelkup.common.result.ErrorCode;
 import com.codelkup.common.result.PageResult;
 import com.codelkup.common.result.Result;
 import com.codelkup.module.content.dto.PostCreateRequest;
@@ -13,13 +15,18 @@ import com.codelkup.module.content.vo.PostDetailVO;
 import com.codelkup.module.content.vo.PostListVO;
 import com.codelkup.module.content.vo.TagVO;import com.codelkup.module.user.entity.User;
 import com.codelkup.security.CurrentUser;
+import com.codelkup.security.RateLimitService;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.validation.Valid;
+import jakarta.validation.constraints.Max;
+import jakarta.validation.constraints.Min;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.security.access.prepost.PreAuthorize;
+import org.springframework.validation.annotation.Validated;
 import org.springframework.web.bind.annotation.*;
 
 import java.util.List;
@@ -36,6 +43,7 @@ import java.util.List;
  * @author 刘
  */
 @Slf4j
+@Validated
 @Tag(name = "内容", description = "板块 / 标签 / 帖子")
 @RestController
 @RequestMapping("/api")
@@ -45,6 +53,11 @@ public class ContentController {
     private final PostService postService;
     private final BoardService boardService;
     private final TagService tagService;
+    private final RateLimitService rateLimitService;
+
+    /** 发帖限流：默认 20 帖/小时/用户 */
+    @Value("${codelkup.rate-limit.post-per-hour:20}")
+    private int postPerHour;
 
     // ==================== 板块 ====================
 
@@ -78,18 +91,53 @@ public class ContentController {
                                         @CurrentUser User currentUser,
                                         HttpServletRequest request) {
         Long viewerId = currentUser == null ? null : currentUser.getId();
+        // 游客按 IP 去重浏览数。IP 由容器层保证不可伪造
+        // （application.yml: server.forward-headers-strategy=native + remoteip.internal-proxies，
+        //  仅当直连对端是可信代理时才采信 X-Forwarded-For），
+        // 所以这里直接取 getRemoteAddr()，不再手写解析请求头。
         String viewerKey = currentUser != null
                 ? "u:" + currentUser.getId()
-                : "ip:" + resolveClientIp(request);
+                : "ip:" + request.getRemoteAddr();
         return Result.success(postService.detail(id, viewerId, viewerKey));
+    }
+
+    // ==================== 我的收藏 ====================
+
+    /**
+     * 我的收藏（分页）。
+     *
+     * <p>路径落在 {@code /api/users/me} 命名空间（资源语义是"我这个人的收藏列表"），
+     * 处理器却放在内容控制器 —— 因为返回的是<b>一页帖子</b>，
+     * 与列表/搜索/关注流共用同一套装配（标签、实时计数、互动态）。
+     * 放进 interaction 模块会形成"interaction → content"的反向依赖，
+     * 而 content 侧已经依赖 interaction（PostListAssembler 要用计数与互动状态），
+     * 包依赖成环比路径归类不整齐的代价大得多。
+     *
+     * <p>装配时把当前用户同时当 viewer，所以每条记录的 {@code collected} 都是 true，
+     * 前端卡片可以直接显示"已收藏"态。
+     */
+    @Operation(summary = "我的收藏", description = "需登录；按收藏时间倒序分页，含帖子摘要与作者")
+    @GetMapping("/users/me/collections")
+    public Result<PageResult<PostListVO>> listMyCollections(
+            @CurrentUser(required = true) Long userId,
+            @RequestParam(defaultValue = "1") @Min(value = 1, message = "页码最小为 1") Integer page,
+            @RequestParam(defaultValue = "20")
+            @Min(value = 1, message = "每页最少 1 条")
+            @Max(value = 50, message = "每页最多 50 条") Integer size) {
+        return Result.success(postService.listCollected(userId, page, size));
     }
 
     // ==================== 帖子：写 ====================
 
-    @Operation(summary = "发帖", description = "正文以 Markdown 原文存储；摘要由后端生成")
+    @Operation(summary = "发帖", description = "正文以 Markdown 原文存储；摘要由后端生成。按用户限流（默认 20 帖/小时）")
     @PostMapping("/posts")
     public Result<PostDetailVO> createPost(@Valid @RequestBody PostCreateRequest body,
                                            @CurrentUser(required = true) Long userId) {
+        // 内容创作类接口的限流按**用户**计（不是 IP）：创作必然登录，
+        // 按用户才能精确到人；按 IP 会让 NAT 后的多人互相误伤。
+        if (!rateLimitService.tryAcquire("post", "u:" + userId, postPerHour, 60)) {
+            throw new BusinessException(ErrorCode.TOO_MANY_REQUESTS);
+        }
         return Result.success(postService.create(body, userId));
     }
 
@@ -125,18 +173,5 @@ public class ContentController {
     /** role == 2 即管理员 */
     private boolean isAdmin(User user) {
         return user != null && user.getRole() != null && user.getRole() == 2;
-    }
-
-    /** 取客户端 IP 用于游客浏览去重（与 AuthController 同逻辑，抽出独立工具类会更优雅，此处先内联） */
-    private String resolveClientIp(HttpServletRequest request) {
-        String[] headers = {"X-Forwarded-For", "X-Real-IP", "Proxy-Client-IP"};
-        for (String header : headers) {
-            String value = request.getHeader(header);
-            if (value != null && !value.isBlank() && !"unknown".equalsIgnoreCase(value)) {
-                int comma = value.indexOf(',');
-                return (comma > 0 ? value.substring(0, comma) : value).trim();
-            }
-        }
-        return request.getRemoteAddr();
     }
 }

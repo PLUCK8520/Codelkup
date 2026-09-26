@@ -2,7 +2,9 @@ package com.codelkup.module.user.service.impl;
 
 import com.codelkup.common.exception.BusinessException;
 import com.codelkup.common.result.ErrorCode;
+import com.codelkup.module.content.mapper.PostMapper;
 import com.codelkup.module.user.dto.LoginRequest;
+import com.codelkup.module.user.dto.PasswordChangeRequest;
 import com.codelkup.module.user.dto.ProfileUpdateRequest;
 import com.codelkup.module.user.dto.RegisterRequest;
 import com.codelkup.module.user.dto.TokenResponse;
@@ -24,6 +26,7 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.time.LocalDateTime;
+import java.util.Map;
 
 /**
  * 用户与认证服务实现。
@@ -40,6 +43,8 @@ public class UserServiceImpl implements UserService {
     private final JwtTokenProvider jwtTokenProvider;
     private final TokenStore tokenStore;
     private final LoginAttemptService loginAttemptService;
+    /** 只用于主页的提问统计（一条 COUNT 聚合），见 fillQuestionStats 的说明 */
+    private final PostMapper postMapper;
 
     // ==================== 注册 ====================
 
@@ -148,6 +153,44 @@ public class UserServiceImpl implements UserService {
             tokenStore.removeRefreshToken(userId);
         }
         log.info("登出 | userId={}", userId);
+    }
+
+    // ==================== 修改密码 ====================
+
+    @Override
+    @Transactional(rollbackFor = Exception.class)
+    public void changePassword(Long userId, PasswordChangeRequest request, String accessToken) {
+        User user = getEntityById(userId);
+
+        // 第一步：验原密码。既是安全闸门，也是"操作者确实是本人"的二次确认
+        if (!passwordEncoder.matches(request.getOldPassword(), user.getPassword())) {
+            log.warn("修改密码失败：原密码不正确 | userId={}", userId);
+            throw new BusinessException(ErrorCode.BAD_CREDENTIALS, "原密码不正确");
+        }
+        // 新旧相同没有意义，而且会让用户误以为"改了"（真实场景里很常见）
+        if (passwordEncoder.matches(request.getNewPassword(), user.getPassword())) {
+            throw new BusinessException(ErrorCode.PARAM_ERROR, "新密码不能与原密码相同");
+        }
+
+        User update = new User();
+        update.setId(userId);
+        update.setPassword(passwordEncoder.encode(request.getNewPassword()));
+        userMapper.updateById(update);
+
+        // 第二步：让所有既有凭证失效。
+        //   1) 清 refresh 白名单 —— 其他设备再也不能刷新（本项目是单槽位，等于全端下线）
+        //   2) 拉黑当前 accessToken —— 连"本次请求携带的这枚"也作废，
+        //      强制用新密码重新登录。少了这一步，改密后旧会话还能继续用 30 分钟，
+        //      而"改密"在用户心里意味着"把别人踢下线"。
+        tokenStore.removeRefreshToken(userId);
+        if (accessToken != null) {
+            Claims claims = jwtTokenProvider.parse(accessToken);
+            if (claims != null) {
+                tokenStore.blacklistAccessToken(claims);
+            }
+        }
+
+        log.info("修改密码 | userId={} | 已清除 refresh 白名单并拉黑当前 accessToken", userId);
     }
 
     // ==================== 查询 ====================
@@ -275,7 +318,35 @@ public class UserServiceImpl implements UserService {
     private UserVO toPublicVO(User user) {
         UserVO vo = new UserVO();
         BeanUtils.copyProperties(user, vo);
+        fillQuestionStats(vo, user.getId());
         return vo;
+    }
+
+    /**
+     * 补"提问数 / 已采纳数 / 采纳率"（M2-14）。
+     *
+     * <h2>为什么直接注入 PostMapper</h2>
+     * 这里要的只是一条 COUNT 聚合。MyBatis 的 Mapper 是代理对象、不参与 Spring 的
+     * bean 依赖图（它不反向依赖任何 Service），所以 user → content 的这个方向
+     * 不会形成 bean 循环；相比再抽一层接口，少一个文件、少一层转调。
+     *
+     * <h2>为什么吞异常</h2>
+     * 统计数字是主页的"锦上添花"，查询失败（比如慢查询超时）不该让整个主页 500 ——
+     * 缺失时前端显示「—」。这与"计数取 Redis、失败回落 MySQL"的既有降级口径一致。
+     */
+    private void fillQuestionStats(UserVO vo, Long userId) {
+        try {
+            Map<String, Object> stats = postMapper.countQuestionStats(userId);
+            int asked = ((Number) stats.getOrDefault("asked", 0)).intValue();
+            int accepted = ((Number) stats.getOrDefault("accepted", 0)).intValue();
+
+            vo.setAskedCount(asked);
+            vo.setAcceptedCount(accepted);
+            // 保留 4 位小数：3/4 → 0.75，2/3 → 0.6667，前端再格式化成百分比
+            vo.setAcceptRate(asked == 0 ? null : Math.round(accepted * 10000.0 / asked) / 10000.0);
+        } catch (Exception e) {
+            log.warn("查询提问统计失败（不影响主页展示）| userId={} | err={}", userId, e.getMessage());
+        }
     }
 
     private CurrentUserVO toCurrentVO(User user) {

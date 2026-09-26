@@ -11,6 +11,7 @@ import com.codelkup.module.interaction.mapper.CommentMapper;
 import com.codelkup.module.interaction.mapper.UserActionMapper;
 import com.codelkup.module.interaction.vo.ActionResultVO;
 import com.codelkup.module.notification.event.NotificationEvent;
+import com.codelkup.module.user.event.ReputationEvent;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.context.ApplicationEventPublisher;
@@ -86,6 +87,11 @@ public class UserActionService {
             // 不该再骚扰对方一次；取消点赞也不发（否则取消就通知，观感像刷屏）。
             eventPublisher.publishEvent(
                     NotificationEvent.likePost(post.getAuthorId(), userId, postId));
+            // 声望：仅"首次点赞 + 不是给自己点赞"才给分。
+            // 自己给自己点赞不设限的话，发帖后点一下就是稳定的刷分路径。
+            if (!post.getAuthorId().equals(userId)) {
+                eventPublisher.publishEvent(ReputationEvent.liked(post.getAuthorId()));
+            }
             log.info("点赞成功 | postId={} | userId={}", postId, userId);
         } else {
             log.debug("重复点赞，幂等返回 | postId={} | userId={}", postId, userId);
@@ -103,7 +109,8 @@ public class UserActionService {
      */
     @Transactional(rollbackFor = Exception.class)
     public ActionResultVO unlikePost(Long postId, Long userId) {
-        requirePublishedPost(postId);
+        // 需要作者 ID 才能收回声望：加分与减分必须对称，否则"点赞→取消"可反复刷分
+        Post post = requirePublishedPost(postId);
 
         int deleted = userActionMapper.delete(
                 new com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper<UserAction>()
@@ -115,6 +122,9 @@ public class UserActionService {
         if (deleted > 0) {
             counterService.addPostCount("like", postId, -1);
             eventPublisher.publishEvent(CountChangedEvent.postLike(postId, -1));
+            if (!post.getAuthorId().equals(userId)) {
+                eventPublisher.publishEvent(ReputationEvent.unliked(post.getAuthorId()));
+            }
             log.info("取消点赞 | postId={} | userId={}", postId, userId);
         }
 
@@ -125,7 +135,8 @@ public class UserActionService {
 
     @Transactional(rollbackFor = Exception.class)
     public ActionResultVO collectPost(Long postId, Long userId) {
-        requirePublishedPost(postId);
+        // 需要作者 ID 才能结算声望（与点赞同一套规则：不给自己的帖子加分）
+        Post post = requirePublishedPost(postId);
 
         boolean firstTime = insertActionIgnoringDuplicate(
                 userId, UserAction.TARGET_POST, postId, UserAction.ACTION_COLLECT);
@@ -133,6 +144,9 @@ public class UserActionService {
         if (firstTime) {
             counterService.addPostCount("collect", postId, 1);
             eventPublisher.publishEvent(CountChangedEvent.postCollect(postId, 1));
+            if (!post.getAuthorId().equals(userId)) {
+                eventPublisher.publishEvent(ReputationEvent.collected(post.getAuthorId()));
+            }
             log.info("收藏成功 | postId={} | userId={}", postId, userId);
         }
 
@@ -141,7 +155,7 @@ public class UserActionService {
 
     @Transactional(rollbackFor = Exception.class)
     public ActionResultVO uncollectPost(Long postId, Long userId) {
-        requirePublishedPost(postId);
+        Post post = requirePublishedPost(postId);
 
         int deleted = userActionMapper.delete(
                 new com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper<UserAction>()
@@ -153,6 +167,9 @@ public class UserActionService {
         if (deleted > 0) {
             counterService.addPostCount("collect", postId, -1);
             eventPublisher.publishEvent(CountChangedEvent.postCollect(postId, -1));
+            if (!post.getAuthorId().equals(userId)) {
+                eventPublisher.publishEvent(ReputationEvent.uncollected(post.getAuthorId()));
+            }
             log.info("取消收藏 | postId={} | userId={}", postId, userId);
         }
 
@@ -178,6 +195,10 @@ public class UserActionService {
             // 目标指向帖子：通知点进去要看到讨论上下文，评论没有独立详情页。
             eventPublisher.publishEvent(
                     NotificationEvent.likeComment(comment.getAuthorId(), userId, comment.getPostId()));
+            // 评论被点赞同样是"被认可"：与帖子点赞同一档 +2（不是自己的评论才给分）
+            if (!comment.getAuthorId().equals(userId)) {
+                eventPublisher.publishEvent(ReputationEvent.liked(comment.getAuthorId()));
+            }
         }
 
         return ActionResultVO.of(true, counterService.getCommentLikeCount(commentId));
@@ -200,6 +221,9 @@ public class UserActionService {
         if (deleted > 0) {
             counterService.addCommentLikeCount(commentId, -1);
             eventPublisher.publishEvent(CountChangedEvent.commentLike(commentId, -1));
+            if (!comment.getAuthorId().equals(userId)) {
+                eventPublisher.publishEvent(ReputationEvent.unliked(comment.getAuthorId()));
+            }
         }
 
         return ActionResultVO.of(false, counterService.getCommentLikeCount(commentId));

@@ -88,9 +88,16 @@ public class PostServiceImpl implements PostService {
                 ORDER_BY_WHITELIST.get("latest"));
 
         Page<PostListVO> page = new Page<>(query.getPage(), query.getSize());
+
+        // "已解决/待解决"只对提问帖有意义：非提问帖传了 solved 一律忽略（当没传），
+        // 否则会返回一个"看起来没有数据"的空列表，把调用方引向错误结论。
+        Boolean solved = (query.getType() != null && query.getType() == Post.TYPE_QUESTION)
+                ? query.getSolved()
+                : null;
+
         IPage<PostListVO> result = postMapper.selectPostPage(
                 page, query.getBoardId(), query.getAuthorId(),
-                query.getTagId(), query.getType(), orderBy);
+                query.getTagId(), query.getType(), solved, orderBy);
 
         List<PostListVO> records = result.getRecords();
 
@@ -100,6 +107,21 @@ public class PostServiceImpl implements PostService {
         assembler.assemble(records, viewerId);
 
         return PageResult.of(result.getCurrent(), result.getSize(), result.getTotal(), records);
+    }
+
+    // ==================== 我的收藏 ====================
+
+    @Override
+    public PageResult<PostListVO> listCollected(Long userId, int page, int size) {
+        Page<PostListVO> p = new Page<>(page, size);
+        IPage<PostListVO> result = postMapper.selectCollectedPostPage(p, userId);
+
+        // 与列表页/搜索页/关注流共用同一套装配（标签 + 实时计数 + 我的点赞收藏态）。
+        // 这里 viewerId 就是收藏的归属者：每条都会标成 collected=true，
+        // 前端据此在卡片上显示"已收藏"，也方便用户在列表里直接取消收藏。
+        assembler.assemble(result.getRecords(), userId);
+
+        return PageResult.of(result.getCurrent(), result.getSize(), result.getTotal(), result.getRecords());
     }
 
     // ==================== 详情 ====================

@@ -27,6 +27,16 @@ public interface PostService {
     PageResult<PostListVO> list(PostQueryRequest query, Long viewerId);
 
     /**
+     * 我的收藏（分页，按收藏时间倒序）。
+     *
+     * <p>数据源是 {@code t_user_action}（target_type=帖子, action_type=收藏），
+     * 已被删除或下架的帖子会被过滤掉。
+     *
+     * @param userId 收藏的归属者（即当前登录用户）
+     */
+    PageResult<PostListVO> listCollected(Long userId, int page, int size);
+
+    /**
      * 帖子详情。
      *
      * @param id       帖子ID

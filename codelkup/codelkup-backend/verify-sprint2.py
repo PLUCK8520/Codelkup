@@ -20,9 +20,25 @@ import zlib
 BASE = "http://127.0.0.1:8085"
 JAR_DIR = r"C:\Users\32519\Desktop\Codelkup\codelkup\codelkup-backend"
 JAR = os.path.join(JAR_DIR, "target", "codelkup-backend-0.0.1-SNAPSHOT.jar")
+MYSQL = r"D:\MySQL\MySQL Server 8.0\bin\mysql.exe"
+DB = "codelkup"
+DB_ARGS = ["-h127.0.0.1", "-ucodelkup", "-pchange-me-dev-password", DB, "-N", "-B"]
 
 _opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
 results = []
+
+
+def db_scalar(sql, default=None):
+    """直连 MySQL 取单个标量值 —— 用于把期望值从"真值来源"取，而不是硬编码。"""
+    try:
+        p = subprocess.run([MYSQL] + DB_ARGS + ["-e", sql],
+                           capture_output=True, timeout=25)
+        if p.returncode != 0:
+            return default
+        out = p.stdout.decode("utf-8", "replace").strip()
+        return int(out.splitlines()[0].split("\t")[0]) if out else default
+    except Exception:
+        return default
 
 
 def call(method, path, body=None, token=None, raw=None, content_type=None):
@@ -219,9 +235,16 @@ def main():
               all(r["boardId"] == board_id for r in b["data"]["records"]),
               "返回 %d 条" % len(b["data"]["records"]))
 
+        # ⚠️ 原断言写的是"board_id2 下必然没有帖子 → total == 0"。这在压测数据灌入后
+        #    必然假失败：`.workbuddy/tools/gen-perf-data.py` 往 t_post 写了 1 万行，
+        #    10 个板块雨露均沾，"随便挑一个板块恰好为空"是与数据量耦合的假设。
+        #    改为与**库内真值**比对（项目约定：期望值尽量从真值来源动态取）。
         st, b = call("GET", "/api/posts?boardId=%d&size=50" % board_id2)
-        check("S2.3 筛选不存在的板块 → 空列表",
-              b["data"]["total"] == 0, b["data"]["total"])
+        true_cnt = db_scalar("SELECT COUNT(*) FROM t_post "
+                             "WHERE board_id = %d AND deleted = 0 AND status = 1" % board_id2)
+        check("S2.3 按板块筛选结果与库内真值一致",
+              true_cnt is not None and b["data"]["total"] == true_cnt,
+              "接口 total=%s / 库内真值=%s" % (b["data"]["total"], true_cnt))
 
         st, b = call("GET", "/api/posts?authorId=%d&size=50" % uid_a)
         check("S2.3 按作者筛选生效",

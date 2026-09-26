@@ -3,6 +3,7 @@ package com.codelkup.common.exception;
 import com.codelkup.common.result.ErrorCode;
 import com.codelkup.common.result.Result;
 import jakarta.servlet.http.HttpServletRequest;
+import jakarta.validation.ConstraintViolationException;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.dao.DuplicateKeyException;
 import org.springframework.http.converter.HttpMessageNotReadableException;
@@ -16,6 +17,7 @@ import org.springframework.web.bind.MissingServletRequestParameterException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
 import org.springframework.web.method.annotation.MethodArgumentTypeMismatchException;
+import org.springframework.web.multipart.MaxUploadSizeExceededException;
 import org.springframework.web.servlet.NoHandlerFoundException;
 
 import java.util.stream.Collectors;
@@ -68,6 +70,28 @@ public class GlobalExceptionHandler {
         return fe.getField() + ": " + fe.getDefaultMessage();
     }
 
+    /**
+     * 方法级参数校验失败（{@code @Validated} 类上的 {@code @Min/@Max} 等注解作用在
+     * {@code @RequestParam} 上的场景，如分页的 page/size）。
+     *
+     * <p>与上一条 {@link MethodArgumentNotValidException} 是<b>两套独立机制</b>：
+     * 那个校验请求体（MVC 内置），这个由 AOP 代理在方法进入前校验。
+     * 少了这个处理器，{@code ?size=999} 会落到兜底的 50001 ——
+     * 明明是调用方传错了参数，却报"服务器开小差了"，前端也无法据此提示。
+     */
+    @ExceptionHandler(ConstraintViolationException.class)
+    public Result<Void> handleConstraintViolation(ConstraintViolationException e) {
+        String detail = e.getConstraintViolations().stream()
+                // propertyPath 形如 "listMyCollections.size"，只取末段参数名更可读
+                .map(v -> {
+                    String path = v.getPropertyPath().toString();
+                    return path.substring(path.lastIndexOf('.') + 1) + ": " + v.getMessage();
+                })
+                .collect(Collectors.joining("; "));
+        log.warn("参数校验失败（方法级） | {}", detail);
+        return Result.error(ErrorCode.PARAM_ERROR, detail);
+    }
+
     /** 缺少必要参数 */
     @ExceptionHandler(MissingServletRequestParameterException.class)
     public Result<Void> handleMissingParam(MissingServletRequestParameterException e) {
@@ -88,6 +112,19 @@ public class GlobalExceptionHandler {
     public Result<Void> handleNotReadable(HttpMessageNotReadableException e) {
         log.warn("请求体解析失败 | {}", e.getMessage());
         return Result.error(ErrorCode.PARAM_FORMAT_ERROR, "请求体格式不正确");
+    }
+
+    /**
+     * 上传文件超限（Spring 在进入 Controller 之前就抛了，属于容器层拦截）。
+     *
+     * <p>必须单独处理：否则会落到兜底的 50001 —— 用户传了个大图却看到"服务器错误"，
+     * 完全不知道是自己文件太大。业务层（ImageStorageService）另有一道更严格的
+     * 尺寸校验，这里只是把"容器层先拦下"的那部分翻译成同一套可读提示。
+     */
+    @ExceptionHandler(MaxUploadSizeExceededException.class)
+    public Result<Void> handleMaxUploadSize(MaxUploadSizeExceededException e) {
+        log.warn("上传文件超过容器上限 | {}", e.getMessage());
+        return Result.error(ErrorCode.FILE_TOO_LARGE, "文件过大，请压缩后再上传");
     }
 
     /** 请求方法不支持 */

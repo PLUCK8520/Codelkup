@@ -12,6 +12,7 @@ import com.codelkup.module.interaction.event.CountChangedEvent;
 import com.codelkup.module.interaction.mapper.CommentMapper;
 import com.codelkup.module.interaction.vo.CommentVO;
 import com.codelkup.module.notification.event.NotificationEvent;
+import com.codelkup.module.user.event.ReputationEvent;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.context.ApplicationEventPublisher;
@@ -258,11 +259,17 @@ public class CommentService {
 
         // 清除旧的采纳（如果有）
         Long oldAcceptedId = post.getAcceptedCommentId();
-        if (oldAcceptedId != null && !oldAcceptedId.equals(commentId)) {
+        // 「是否真的发生了改判」：重复采纳同一条评论是幂等的，不该再结算一次声望
+        boolean changed = !commentId.equals(oldAcceptedId);
+        if (oldAcceptedId != null && changed) {
             Comment old = commentMapper.selectById(oldAcceptedId);
             if (old != null) {
                 old.setIsAccepted(0);
                 commentMapper.updateById(old);
+                // 改判要收回已给出去的声望：否则"来回改采纳对象"能反复刷 +15
+                if (!old.getAuthorId().equals(operatorId)) {
+                    eventPublisher.publishEvent(ReputationEvent.acceptRevoked(old.getAuthorId()));
+                }
             }
         }
 
@@ -278,6 +285,13 @@ public class CommentService {
         // 「自己采纳自己」的情况（楼主回答自己的提问）由通知模块统一拦掉，此处不必判断。
         eventPublisher.publishEvent(NotificationEvent.accept(
                 comment.getAuthorId(), operatorId, postId));
+
+        // 声望：+15 给被采纳的回答者，但只给"别人的回答"且只在改判时结算一次。
+        // ⚠️ 通知保持原行为（不按 changed 过滤），避免改动既有通知语义 ——
+        //    本轮只把"会累积、会被人钻空子"的声望做成幂等。
+        if (changed && !comment.getAuthorId().equals(operatorId)) {
+            eventPublisher.publishEvent(ReputationEvent.accepted(comment.getAuthorId()));
+        }
 
         log.info("采纳答案 | postId={} | commentId={} | operatorId={}", postId, commentId, operatorId);
     }

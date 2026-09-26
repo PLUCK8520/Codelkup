@@ -1,0 +1,30 @@
+-- ============================================================
+-- V7: 热度分索引（让 hot 排序真正可用）
+-- ============================================================
+--
+-- 【背景：为什么 V5/V6 的索引对 hot 无效】
+--   三种排序（PostServiceImpl.ORDER_BY_WHITELIST）都以 is_top DESC 开头：
+--       latest → p.is_top DESC, p.create_time DESC
+--       hot    → p.is_top DESC, p.score DESC, p.create_time DESC
+--       active → p.is_top DESC, p.last_active DESC
+--   V5/V6 建的是 (status, is_top DESC, create_time DESC) —— 对 latest 恰好够用，
+--   但 hot 的 ORDER BY 中间多了一列 score，索引列顺序与排序不一致 → 仍会 filesort。
+--
+--   这个缺陷此前**看不出来**：t_post.score 一直是死字段（创建时写 0，之后无人更新），
+--   score 全为 0 时 hot 与 latest 的排序结果等价，filesort 也拖不慢（数据量小）。
+--   一旦 ScoreService 开始写真实热度分，hot 就会退化成"读全表再排序"。
+--   所以本迁移是热度分功能的**前置条件**，不是"顺手优化"。
+--
+-- 【为什么索引列是 (status, is_top DESC, score DESC, create_time DESC)】
+--   - status：等值条件（WHERE p.status = 1）→ 放最左
+--   - is_top / score：排序前缀，方向必须与 ORDER BY 一致
+--     降序索引方向写错就会退回 filesort —— V5 → V6 已经完整踩过一次（见 V6 注释）
+--   - create_time DESC：score 相同时的 tie-breaker，保证顺序稳定可复现
+--
+-- 【为什么只建一个，不建 board 维度】
+--   带 board_id 过滤的"板块内按热度"仍是 filesort，但那属次要入口；
+--   先把列表页默认路径（全局 hot）做到无 filesort，再按需追加索引 ——
+--   索引不是越多越好，每个索引都要写入侧买单。
+-- ============================================================
+
+CREATE INDEX idx_hot ON t_post (status, is_top DESC, score DESC, create_time DESC);

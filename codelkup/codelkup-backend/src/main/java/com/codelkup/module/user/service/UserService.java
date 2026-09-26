@@ -26,6 +26,14 @@ public interface UserService {
     /** 登出：accessToken 拉黑 + refreshToken 白名单移除 */
     void logout(String accessToken, Long userId);
 
+    /**
+     * 修改密码。
+     *
+     * @param accessToken 当前请求携带的 accessToken（改密后要把它一起拉黑，
+     *                    强制本人也用新密码重新登录 —— 否则改密对"当前这个会话"毫无意义）
+     */
+    void changePassword(Long userId, com.codelkup.module.user.dto.PasswordChangeRequest request, String accessToken);
+
     /** 邮箱是否已被占用 */
     boolean isEmailTaken(String email);
 

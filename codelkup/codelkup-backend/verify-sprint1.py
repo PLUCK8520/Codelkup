@@ -246,6 +246,28 @@ def main():
         check("登录失败 5 次后触发锁定 (42902)",
               42902 in codes, codes)
 
+        # ==================== 邮箱查重限流（防批量枚举）====================
+        # /api/auth/check-email 按设计就要回答"某邮箱是否已注册"（注册表单失焦提示），
+        # 等于一个可查询的枚举口子，因此加了按 IP 的固定窗口限流（30 次 / 10 分钟）。
+        #
+        # ⚠️ 这里用 X-Forwarded-For 指向一个**专属测试 IP**，把 31 次流量与
+        #    本机真实 IP 的桶隔离开，避免污染后续断言与重复运行。
+        #    直连对端是 127.0.0.1（在 internal-proxies 里 = 可信代理），所以该头会被
+        #    Tomcat 的 RemoteIpValve 采纳；换成不受信的公网对端则不会被采纳 ——
+        #    那条边界由容器配置保证，本机脚本无法模拟公网对端。
+        spam_ip = "203.0.113.%d" % (int(time.time()) % 200 + 1)  # TEST-NET-3，语义上不可路由
+        last_code = None
+        for _ in range(31):
+            st, b = call("GET", "/api/auth/check-email?email=probe@test.com",
+                         headers={"X-Forwarded-For": spam_ip})
+            last_code = b.get("code") if isinstance(b, dict) else st
+        check("邮箱查重超过配额后被限流 (42901)", last_code == 42901, last_code)
+
+        # 限流必须按维度隔离：打满的是 spam_ip 的桶，本机真实 IP 不该被误伤
+        st, b = call("GET", "/api/auth/check-email?email=probe@test.com")
+        check("邮箱查重限流按 IP 隔离（不误伤正常来源）",
+              b and b.get("code") == 0, b.get("code") if isinstance(b, dict) else st)
+
         # ==================== 404 兜底 ====================
         # 未认证时不泄露"路径是否存在" → 40001 只在已认证后才可能出现。
         # 这里用带合法 token 的请求验证 404 兜底链路本身仍然有效。

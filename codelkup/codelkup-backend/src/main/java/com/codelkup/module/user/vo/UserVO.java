@@ -48,6 +48,22 @@ public class UserVO {
     @Schema(description = "最后活跃时间")
     private LocalDateTime lastActive;
 
+    // ==================== 提问统计（只读，V0.3 / M2-14） ====================
+    //
+    // 只出现在公开主页（GET /api/users/{id}）。CurrentUserVO 继承本类但不会填这几个
+    // 字段（它服务的是顶栏身份展示，不需要这些数字），因此"查看自己"时它们为 null ——
+    // 前端对 null 显示「—」，而不是 0，避免把"没数据"和"真的是 0"混为一谈。
+
+    @Schema(description = "提问数（已发布的提问帖）")
+    private Integer askedCount;
+
+    @Schema(description = "已采纳数")
+    private Integer acceptedCount;
+
+    /** 采纳率 = 已采纳数 / 提问数（0~1 四位小数）；一次都没提问过时为 null */
+    @Schema(description = "采纳率（0~1）；未提问过为 null", example = "0.75")
+    private Double acceptRate;
+
     // ⚠️ 注意：此处不得添加 email 字段。
     //    邮箱属于个人隐私，仅在"查看自己的资料"场景下通过单独接口返回，
     //    避免在公开主页接口中泄露他人邮箱。

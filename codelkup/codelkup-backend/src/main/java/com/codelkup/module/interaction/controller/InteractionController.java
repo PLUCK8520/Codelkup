@@ -1,5 +1,7 @@
 package com.codelkup.module.interaction.controller;
 
+import com.codelkup.common.exception.BusinessException;
+import com.codelkup.common.result.ErrorCode;
 import com.codelkup.common.result.Result;
 import com.codelkup.module.interaction.dto.CommentCreateRequest;
 import com.codelkup.module.interaction.service.CommentService;
@@ -10,11 +12,13 @@ import com.codelkup.module.interaction.vo.CommentVO;
 import com.codelkup.module.interaction.vo.RebuildReportVO;
 import com.codelkup.module.user.entity.User;
 import com.codelkup.security.CurrentUser;
+import com.codelkup.security.RateLimitService;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.web.bind.annotation.*;
 
@@ -42,6 +46,11 @@ public class InteractionController {
     private final CommentService commentService;
     private final UserActionService userActionService;
     private final CounterRebuildService counterRebuildService;
+    private final RateLimitService rateLimitService;
+
+    /** 评论限流：默认 60 条/小时/用户 */
+    @Value("${codelkup.rate-limit.comment-per-hour:60}")
+    private int commentPerHour;
 
     // ==================== 评论 ====================
 
@@ -53,11 +62,15 @@ public class InteractionController {
         return Result.success(commentService.listByPost(postId, viewerId, isAdmin(currentUser)));
     }
 
-    @Operation(summary = "发表评论 / 回复", description = "parentId 传被回复的评论ID 即为回复")
+    @Operation(summary = "发表评论 / 回复", description = "parentId 传被回复的评论ID 即为回复。按用户限流（默认 60 条/小时）")
     @PostMapping("/posts/{postId}/comments")
     public Result<CommentVO> createComment(@PathVariable Long postId,
                                            @Valid @RequestBody CommentCreateRequest body,
                                            @CurrentUser(required = true) Long userId) {
+        // 与发帖同一口径：内容创作按**用户**限流（创作必然登录，按 IP 会误伤 NAT 后的他人）
+        if (!rateLimitService.tryAcquire("comment", "u:" + userId, commentPerHour, 60)) {
+            throw new BusinessException(ErrorCode.TOO_MANY_REQUESTS);
+        }
         return Result.success(commentService.create(postId, body, userId));
     }
 

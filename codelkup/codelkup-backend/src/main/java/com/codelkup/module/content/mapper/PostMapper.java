@@ -10,6 +10,7 @@ import org.apache.ibatis.annotations.Select;
 import org.apache.ibatis.annotations.Update;
 
 import java.util.List;
+import java.util.Map;
 
 /**
  * 帖子 Mapper。
@@ -45,6 +46,12 @@ public interface PostMapper extends BaseMapper<Post> {
             <if test="boardId != null">        AND p.board_id = #{boardId}        </if>
             <if test="authorId != null">       AND p.author_id = #{authorId}       </if>
             <if test="type != null">           AND p.type = #{type}               </if>
+            <if test="solved != null">
+                <choose>
+                    <when test="solved">AND p.accepted_comment_id IS NOT NULL</when>
+                    <otherwise>AND p.accepted_comment_id IS NULL</otherwise>
+                </choose>
+            </if>
             <if test="tagId != null">
                 AND EXISTS (SELECT 1 FROM t_post_tag pt WHERE pt.post_id = p.id AND pt.tag_id = #{tagId})
             </if>
@@ -56,6 +63,7 @@ public interface PostMapper extends BaseMapper<Post> {
                                      @Param("authorId") Long authorId,
                                      @Param("tagId") Long tagId,
                                      @Param("type") Integer type,
+                                     @Param("solved") Boolean solved,
                                      @Param("orderBy") String orderBy);
 
     /** 详情：帖子 + 作者 + 板块，一次取回 */
@@ -119,6 +127,65 @@ public interface PostMapper extends BaseMapper<Post> {
     /** 枚举全部未删除帖子 ID —— 供全量重建脚本使用 */
     @Select("SELECT id FROM t_post WHERE deleted = 0")
     List<Long> selectAllIds();
+
+    // ==================== 提问闭环（V0.3 / M2-14） ====================
+
+    /**
+     * 某用户的提问统计：提问数 + 已采纳数。
+     *
+     * <p>一条 SQL 出两列而不是两次 COUNT：两次查询在"两次之间恰好发生采纳"时
+     * 会给出自相矛盾的快照（已采纳 &gt; 提问），而一个 SUM 里不可能出现这种偏差。
+     *
+     * <p>{@code COALESCE} 兜住"一条提问都没有"的情形 —— 那时 {@code SUM} 返回
+     * NULL 而不是 0，直接取 intValue 会 NPE。
+     *
+     * <p>命中 {@code idx_author(author_id)}（V2 已建），按作者取自己的帖子是索引扫描。
+     */
+    @Select("""
+            SELECT COUNT(*) AS asked,
+                   COALESCE(SUM(p.accepted_comment_id IS NOT NULL), 0) AS accepted
+            FROM t_post p
+            WHERE p.deleted = 0 AND p.status = 1 AND p.type = 1 AND p.author_id = #{authorId}
+            """)
+    Map<String, Object> countQuestionStats(@Param("authorId") Long authorId);
+
+    // ==================== 热度分（V0.3） ====================
+
+    /**
+     * 全量重算热度分 —— <b>一条 SQL</b>，不做逐帖 update。
+     *
+     * <p>为什么放在 SQL 里算而不是应用层循环：1 万行量级下一条 UPDATE 不到 1 秒，
+     * 而"查出全部帖子 → 逐帖算 → 逐帖写"要几十次往返，且中途失败会留下半新半旧的分。
+     *
+     * <h2>公式</h2>
+     * <pre>
+     * score = (1 + 2*赞 + 3*藏 + 4*评论) * e^(-λ * 距最后活跃小时数)
+     * </pre>
+     * 三处设计意图：
+     * <ol>
+     *   <li><b>权重递增（评论 &gt; 收藏 &gt; 点赞）</b>：写评论的成本最高，对社区的贡献最大；
+     *       点赞最廉价，权重最低。常数 1 保证"零互动帖"也有基础分（否则全为 0 时排序退化）。</li>
+     *   <li><b>时间衰减</b>：热度是"当下有人讨论"而不是"历史累计"，
+     *       没有衰减的话老帖会永久霸榜（这正是排行榜类功能最常见的退化形态）。</li>
+     *   <li><b>COALESCE(last_active, create_time)</b>：老数据可能没有 last_active，
+     *       缺了会让整个表达式变成 NULL（score 变 NULL，排序时排到最前或最后都很难解释）。</li>
+     * </ol>
+     *
+     * <p>⚠️ 权重与 λ 来自配置（{@code codelkup.score.*}），仍然是 {@code #{}} 参数化绑定 ——
+     * 即便将来把它做成"管理端可调"，也不能退化成字符串拼接。
+     */
+    @Update("""
+            UPDATE t_post
+               SET score = (1 + #{likeWeight} * like_count
+                              + #{collectWeight} * collect_count
+                              + #{commentWeight} * comment_count)
+                           * EXP(-#{decayLambda} * TIMESTAMPDIFF(HOUR, COALESCE(last_active, create_time), NOW()))
+             WHERE deleted = 0 AND status = 1
+            """)
+    int recalcScores(@Param("likeWeight") int likeWeight,
+                     @Param("collectWeight") int collectWeight,
+                     @Param("commentWeight") int commentWeight,
+                     @Param("decayLambda") double decayLambda);
 
     /** 批量取多篇帖子的标签（避免逐篇查询） */
     @Select("<script>" +
@@ -233,4 +300,43 @@ public interface PostMapper extends BaseMapper<Post> {
             </script>
             """)
     IPage<PostListVO> selectFeedPage(IPage<PostListVO> page, @Param("authorIds") List<Long> authorIds);
+
+    // ==================== 我的收藏（V0.3 / M2-8） ====================
+
+    /**
+     * 我的收藏（分页）—— 从 {@code t_user_action} 出发取帖子。
+     *
+     * <h2>为什么是一条 JOIN，而不是"先查 ID 再查帖子"</h2>
+     * 两段式查询要自己处理三件事：把 ID 列表切成当前页、按 ID 二次查询后再把顺序
+     * 还原回收藏顺序、总数还要另发一条 COUNT。JOIN 让分页/排序/总数都在数据库
+     * 一次完成，也不必在 Java 侧维护"顺序数组 ↔ VO 列表"的一致性。
+     *
+     * <h2>排序依据是"收藏时间"而非"发布时间"</h2>
+     * 用户要找的是"我最近收的那篇"，不是"最近有人发的那篇"。
+     * 次级键 {@code ua.id} 用于同一秒内收藏两条时的稳定顺序 ——
+     * {@code create_time} 是秒精度，缺了它 MySQL 对并列行的返回顺序不做保证，
+     * 翻页会出现重复或漏项。
+     *
+     * <h2>为什么过滤 deleted / status</h2>
+     * 收藏列表给的是"能点开的帖子"。已被删除或下架的帖子留在列表里就是死链，
+     * 比少一条更糟。（代价是 total 会随之变化，这符合"列表里只有可见内容"的直觉。）
+     *
+     * <p>{@code target_type = 1 AND action_type = 2} 为字面量，与
+     * {@code UserAction.TARGET_POST / ACTION_COLLECT} 同义 —— 注解里的 SQL
+     * 不引入 Java 常量拼接，便于把整条语句复制到客户端里直接 EXPLAIN。
+     */
+    @Select("""
+            SELECT p.id, p.title, p.summary, p.author_id, p.board_id, p.type, p.is_top, p.is_featured,
+                   p.view_count, p.like_count, p.comment_count, p.collect_count, p.score, p.last_active,
+                   p.create_time,
+                   u.nickname AS author_nickname, u.avatar AS author_avatar,
+                   b.name AS board_name, b.slug AS board_slug
+            FROM t_user_action ua
+            JOIN t_post  p ON p.id = ua.target_id AND p.deleted = 0 AND p.status = 1
+            LEFT JOIN t_user  u ON u.id = p.author_id
+            LEFT JOIN t_board b ON b.id = p.board_id
+            WHERE ua.user_id = #{userId} AND ua.target_type = 1 AND ua.action_type = 2
+            ORDER BY ua.create_time DESC, ua.id DESC
+            """)
+    IPage<PostListVO> selectCollectedPostPage(IPage<PostListVO> page, @Param("userId") Long userId);
 }
