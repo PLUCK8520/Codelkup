@@ -35,8 +35,12 @@ application-local.yml
 logs/
 
 ### 上传文件（本地存储）###
+# 运行期存储根 = codelkup.upload.root（默认 ./uploads，见 application.yml），
+# 相对 backend 目录 → 用锚定的 /uploads/ 就能精确匹配，别写不带斜杠开头的
+# `upload/`：那条会**匹配任意层级**下名为 upload 的目录，连源码包
+# src/main/java/com/codelkup/module/upload/ 一起忽略掉 ——
+# 结果是上传模块的三个源文件静默不进版本库，别人 clone 下来直接编译失败。
 /uploads/
-upload/
 
 ### OS ###
 .DS_Store

@@ -93,6 +93,9 @@ services:
       # 上传目录指向数据卷挂载点（Dockerfile 里已建好并设了属主）
       UPLOAD_ROOT: /app/uploads
       CORS_ALLOWED_ORIGINS: ${CORS_ALLOWED_ORIGINS:-http://localhost:8080}
+      # JVM 堆上限：容器里默认按宿主机物理内存算堆，小内存 VPS 上会和 MySQL 抢内存
+      # 被 OOM Kill。2C2G 建议 35~40，2C4G 建议 55（见 deploy/.env.production.example）
+      JVM_MAX_RAM_PERCENTAGE: ${JVM_MAX_RAM_PERCENTAGE:-75.0}
     volumes:
       - uploads-data:/app/uploads
     depends_on:
@@ -111,7 +114,7 @@ services:
     restart: unless-stopped
     ports:
       # 唯一对宿主机暴露的端口。8080 而不是 80：Windows 上 80 常被占用，
-      # 且不占 5173/8085 —— 那两个是本地开发用的（vite dev server / 后端 jar）。
+      # 且不占 5273/8085 —— 那两个是本地开发用的（vite dev server / 后端 jar）。
       - "${WEB_PORT:-8080}:80"
     depends_on:
       backend:

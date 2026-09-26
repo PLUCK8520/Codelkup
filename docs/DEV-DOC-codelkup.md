@@ -900,19 +900,30 @@ score = (likeCount * 3 + commentCount * 5 + viewCount * 0.1)
 
 | 方法 | 路径 | 说明 |
 |---|---|---|
-| GET | `/{id}` | 用户主页信息 |
+| GET | `/{id}` | 用户主页信息（V0.3 追加只读统计：`askedCount` / `acceptedCount` / `acceptRate`，均按"已发布提问帖"口径；一次都没提问过时 `acceptRate` 为 `null`）|
+| GET | `/me` | 本人资料（含邮箱）|
 | PUT | `/me` | 修改自己的资料 |
+| PUT | `/me/password` | 修改密码（验旧密码 → 清 refresh 白名单并拉黑当前 accessToken，需重新登录）|
+| POST | `/me/avatar` | 上传头像（jpg/png/webp ≤2MB；替换成功后清理旧文件，与正文配图共用上传限流桶）|
+| GET | `/me/collections` | 我的收藏（分页，按收藏时间倒序；已被删除/下架的帖子不返回）|
 | GET | `/{id}/posts` | 某用户的帖子列表 |
 | GET | `/{id}/followers` | 粉丝列表 |
 | GET | `/{id}/followees` | 关注列表 |
 | POST | `/{id}/follow` | 关注 |
 | DELETE | `/{id}/follow` | 取关 |
 
+### 上传 `/api/uploads`
+
+| 方法 | 路径 | 说明 |
+|---|---|---|
+| POST | `/images` | 通用图片上传（正文配图）。jpg/jpeg/png/webp、≤5MB、需登录；扩展名白名单 + 魔数校验 + 单用户文件数配额 + 30 次/小时限流，返回 `{url}` |
+
 ### 帖子 `/api/posts`
 
 | 方法 | 路径 | 说明 |
 |---|---|---|
-| GET | `/` | 帖子列表（boardId / tag / sort / 分页）|
+| GET | `/` | 帖子列表（boardId / tag / type / sort / 分页）|
+| GET | `/?type=1&solved=false` | 提问闭环筛选：`solved=true` 只看已采纳、`false` 只看未采纳（**仅 `type=1` 生效**，其他类型传了当没传）|
 | GET | `/{id}` | 帖子详情（浏览量 +1）|
 | POST | `/` | 发帖 |
 | PUT | `/{id}` | 编辑帖子 |

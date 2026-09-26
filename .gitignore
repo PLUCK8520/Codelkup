@@ -18,6 +18,11 @@ uploads/
 *.log
 logs/
 
+# ---------- Python 字节码缓存 ----------
+# deploy/ 与各 verify 脚本是 Python，跑一次就会生成 __pycache__/
+__pycache__/
+*.pyc
+
 # ---------- Vite 依赖预构建缓存与本地临时文件 ----------
 # vite.config.ts 显式把 cacheDir 设到了项目根 .vite-cache（避开 node_modules 被删除拦截），
 # 这是缓存，绝不能进版本库。
