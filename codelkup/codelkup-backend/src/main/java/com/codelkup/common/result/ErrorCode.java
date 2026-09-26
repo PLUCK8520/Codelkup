@@ -30,6 +30,7 @@ public enum ErrorCode {
     PARAM_FORMAT_ERROR(40003, "参数格式不正确"),
     FILE_TYPE_NOT_ALLOWED(40004, "文件类型不支持"),
     FILE_TOO_LARGE(40005, "文件过大"),
+    UPLOAD_QUOTA_EXCEEDED(40006, "上传数量已达上限"),
 
     // ===== 401xx 认证 =====
     UNAUTHORIZED(40101, "未登录或登录已过期"),

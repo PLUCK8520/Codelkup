@@ -8,12 +8,28 @@ server:
   port: ${SERVER_PORT:8085}
   # 优雅停机：等待在途请求处理完再退出，避免计数落库/通知丢失
   shutdown: graceful
+
+  # ========== 客户端 IP 的信任边界（安全相关，别删）==========
+  # 背景：登录失败锁定按「IP + 邮箱」计数（LoginAttemptService），
+  #      浏览器浏览去重也按 IP 区分访客。若 IP 可被请求头伪造，这两个控制都会失效。
+  #
+  # native = 启用 Tomcat 的 RemoteIpValve：只有当**直连对端**落在 internal-proxies
+  #      里（即确实来自我们自己的 nginx / 容器网络）时，才采信 X-Forwarded-For；
+  #      直连的公网请求自带的伪造 XFF 一律不采信，remoteAddr 保持真实 socket 地址。
+  #      配合前端 nginx 侧「覆盖而非追加」XFF（见 nginx.conf），伪造值进不来也信不过。
+  forward-headers-strategy: native
   tomcat:
     threads:
       max: 200
       min-spare: 10
     accept-count: 100
     max-connections: 8192
+    remoteip:
+      remote-ip-header: X-Forwarded-For
+      protocol-header: X-Forwarded-Proto
+      # 可信代理网段：本机回环 + RFC1918 私有网段（Docker 默认 bridge 为 172.16~172.31，
+      # 若自定义了 compose network 的子网，需同步加进来）
+      internal-proxies: '10\.\d{1,3}\.\d{1,3}\.\d{1,3}|192\.168\.\d{1,3}\.\d{1,3}|169\.254\.\d{1,3}\.\d{1,3}|127\.\d{1,3}\.\d{1,3}\.\d{1,3}|172\.1[6-9]\.\d{1,3}\.\d{1,3}|172\.2\d\.\d{1,3}\.\d{1,3}|172\.3[01]\.\d{1,3}\.\d{1,3}|0:0:0:0:0:0:0:1|::1'
 
 spring:
   application:
@@ -70,8 +86,10 @@ spring:
   # ========== 文件上传 ==========
   servlet:
     multipart:
-      max-file-size: 5MB
-      max-request-size: 10MB
+      # 容器层上限比业务上限（codelkup.upload.max-image-size-mb=5）宽一档：
+      # 超限请求会先被容器拦下，由 GlobalExceptionHandler 翻成 40005 的可读提示
+      max-file-size: 6MB
+      max-request-size: 12MB
 
   # ========== Flyway ==========
   flyway:
@@ -124,13 +142,53 @@ codelkup:
     refresh-token-ttl-seconds: ${JWT_REFRESH_TTL:604800}   # 7 天
     issuer: codelkup
   cors:
-    allowed-origins: ${CORS_ALLOWED_ORIGINS:http://localhost:5173}
+    # 开发期前端 dev server 的地址（vite.config.ts 的 server.port）。
+    # ⚠️ 5273 是本项目的端口；5173 保留在列表里只是为了让"旧书签/旧终端"不至于突然跨域失败，
+    #    新环境只需要 5273 这一项。生产走 nginx 同源反代，用不到 CORS。
+    allowed-origins: ${CORS_ALLOWED_ORIGINS:http://localhost:5273,http://localhost:5173}
+  # ========== 限流阈值（防枚举 / 防口令喷洒）==========
+  # 默认值就是"保守口径"：注册 5 次/小时/IP、登录失败 30 次/10 分钟/IP。
+  # ⚠️ 什么时候该调大：
+  #   1) 部署在共享出口 IP（办公 / 校园 NAT）—— 阈值按"I 个出口 IP"计数，会互相影响
+  #   2) 需要在一小时内重复跑 verify-sprint*.py（脚本单次会注册 5 个用户）
+  #   调小则更严格；调大后记得同步 verify-v03-security.py 的断言口径。
+  # 说明见上。upload / post / comment 三个桶按**用户**计（创作与上传必然登录），
+  # 上面的 register / login-ip-max 按 IP 计。
+  rate-limit:
+    register-per-hour: ${RATE_LIMIT_REGISTER_PER_HOUR:5}
+    login-ip-max: ${RATE_LIMIT_LOGIN_IP_MAX:30}
+    # 图片上传：30 次/小时/用户
+    upload-per-hour: ${RATE_LIMIT_UPLOAD_PER_HOUR:30}
+    # 发帖：20 帖/小时/用户
+    post-per-hour: ${RATE_LIMIT_POST_PER_HOUR:20}
+    # 评论：60 条/小时/用户
+    comment-per-hour: ${RATE_LIMIT_COMMENT_PER_HOUR:60}
+  # ========== 热度分（hot 排序的真实数据来源）==========
+  # 模型：MySQL 只存"当前分数"这一列，由定时任务一条 SQL 全量重算。
+  #   不做增量维护 —— 时间衰减是随当前时间连续变化的量，增量更新要在读取时补偿，
+  #   反而复杂且容易漂移；1 万帖量级全量重算 < 1s，每 5 分钟一次可忽略。
+  # 公式：score = (1 + 2*赞 + 3*藏 + 4*评) * e^(-λ * 距最后活跃小时数)
+  #   λ=0.02 → 半衰期约 34.7 小时（"一天半前的热度折半"）
+  score:
+    enabled: ${SCORE_ENABLED:true}
+    like-weight: ${SCORE_LIKE_WEIGHT:2}
+    collect-weight: ${SCORE_COLLECT_WEIGHT:3}
+    comment-weight: ${SCORE_COMMENT_WEIGHT:4}
+    decay-lambda: ${SCORE_DECAY_LAMBDA:0.02}
+    # 启动后首跑延迟与执行间隔（验收脚本会调到秒级，好在一次运行内看到分数变化）
+    initial-delay-ms: ${SCORE_INITIAL_DELAY_MS:30000}
+    interval-ms: ${SCORE_INTERVAL_MS:300000}
   upload:
     # 上传文件的存储根目录（相对路径基于进程工作目录）
     # ⚠️ 生产环境应指向独立的数据卷，不要放在代码目录下
     root: ${UPLOAD_ROOT:./uploads}
     # 对外访问前缀，需与 WebMvcConfig 的资源映射一致
     url-prefix: /uploads
+    # 正文配图单文件上限（MB）。前端粘贴上传会先压到长边 1600 的 WebP，正常远小于此值；
+    # 容器层 spring.servlet.multipart 的 6MB 比它宽一档，好让超限走业务提示而不是容器 500
+    max-image-size-mb: ${UPLOAD_MAX_IMAGE_MB:5}
+    # 单用户正文配图文件数上限（防滥用阈值，不是正常使用门槛；调大即可放宽）
+    max-files-per-user: ${UPLOAD_MAX_FILES_PER_USER:200}
 
 logging:
   level:

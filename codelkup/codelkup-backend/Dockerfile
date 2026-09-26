@@ -59,7 +59,9 @@ HEALTHCHECK --interval=15s --timeout=5s --start-period=75s --retries=6 \
 
 # MaxRAMPercentage 让 JVM 按 cgroup 限制计算堆大小，
 # 而不是按宿主机物理内存 —— 容器里默认行为会算出过大的堆，容易被 OOM Kill。
-ENTRYPOINT ["java", \
-  "-XX:MaxRAMPercentage=75.0", \
-  "-Djava.security.egd=file:/dev/./urandom", \
-  "-jar", "app.jar"]
+#
+# ⚠️ 这里用 `sh -c` 包一层是为了让堆上限**可配**：2C2G 的小内存 VPS 上
+#    JVM 会和 MySQL 抢内存，必须把百分比压到 35 左右（compose 里通过
+#    JVM_MAX_RAM_PERCENTAGE 注入）。exec 保证 PID 1 仍然是 java，信号能正常收到。
+ENV JVM_MAX_RAM_PERCENTAGE=75.0
+ENTRYPOINT ["sh", "-c", "exec java -XX:MaxRAMPercentage=${JVM_MAX_RAM_PERCENTAGE} -Djava.security.egd=file:/dev/./urandom -jar app.jar"]

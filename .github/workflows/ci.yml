@@ -1,0 +1,90 @@
+# ============================================================
+# CI：把"本机能跑"变成"每次提交都能跑"
+#
+# 为什么只做这两件事（后端单测 / 前端类型检查+构建）：
+#   它们**不依赖 MySQL、Redis 与后端进程**，因此能在 GitHub 托管的空机器上
+#   稳定复现。verify-sprint*.py 这类验收脚本需要一个跑起来的栈，
+#   属于部署自检（deploy/verify-deploy.py 覆盖），刻意不放进 CI —— 否则
+#   每次提交都要先拉起整套 compose，慢且脆。
+# ============================================================
+name: CI
+
+on:
+  push:
+    branches: ['**']
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  backend:
+    name: 后端 · 编译 + 单测
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: codelkup/codelkup-backend
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: 安装 JDK 21
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+          cache: maven
+
+      # verify = 编译 + 单测（含 Jacoco 报告）。单测全部是纯单元测试
+      # （MarkdownUtilsTest / SearchServiceSanitizeTest / LoginAttemptServiceTest），
+      # 不启动 Spring 容器、不连数据库。
+      - name: mvn verify
+        run: mvn -B verify
+
+      - name: 归档覆盖率报告
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: jacoco-report
+          path: codelkup/codelkup-backend/target/site/jacoco
+          if-no-files-found: ignore
+
+  frontend:
+    name: 前端 · 类型检查 + 构建
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: codelkup/codelkup-frontend
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: 安装 Node 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: codelkup/codelkup-frontend/package-lock.json
+
+      - name: npm ci
+        run: npm ci
+
+      # build 脚本 = vue-tsc -b && vite build：类型错误会让 CI 直接红
+      - name: npm run build
+        run: npm run build
+
+      # 自包含的前端契约测试（本地 mock / jsdom，无需后端与数据库）
+      - name: Markdown URL 白名单契约测试
+        run: node verify-v03-markdown-uri.mjs
+
+      # V0.3 新增的契约测试，同样是 jsdom + 真实源码（不起后端）：
+      # 草稿的时序语义、代码块的复制/行号语义、凭证刷新链路（自带 mock 后端）
+      - name: 草稿自动保存契约测试
+        run: node verify-v03-draft.mjs
+
+      - name: 代码块增强契约测试
+        run: node verify-v03-codeblock.mjs
+
+      - name: 凭证刷新链路契约测试（mock 后端）
+        run: node verify-refresh-frontend.mjs
+
+      - name: 既有前端契约测试（渲染消毒 / 高亮切分）
+        run: |
+          node verify-sprint2-frontend.mjs
+          node verify-sprint4-frontend.mjs

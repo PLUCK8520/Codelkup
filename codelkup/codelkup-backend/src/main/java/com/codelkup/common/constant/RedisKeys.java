@@ -52,6 +52,15 @@ public final class RedisKeys {
     /** 登录失败计数：codelkup:auth:login_fail:{ip}:{email} */
     public static final String LOGIN_FAIL_COUNT = PREFIX + "auth:login_fail:";
 
+    /**
+     * 登录失败计数（纯 IP 维度）：codelkup:auth:login_fail_ip:{ip}
+     *
+     * <p>与上一个 key 的区别是"不绑定邮箱"：专门用来发现"每次换一个邮箱、
+     * 每个邮箱只试 4 次"的分片式口令喷洒 —— 那种打法永远不会触发
+     * 「IP + 邮箱」维度的锁定。
+     */
+    public static final String LOGIN_FAIL_BY_IP = PREFIX + "auth:login_fail_ip:";
+
     // ===== 浏览去重（Sprint 2） =====
 
     /**

@@ -3,7 +3,6 @@ package com.codelkup.config;
 import com.fasterxml.jackson.annotation.JsonAutoDetect;
 import com.fasterxml.jackson.annotation.PropertyAccessor;
 import com.fasterxml.jackson.databind.ObjectMapper;
-import com.fasterxml.jackson.databind.jsontype.impl.LaissezFaireSubTypeValidator;
 import com.fasterxml.jackson.datatype.jsr310.JavaTimeModule;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
@@ -52,16 +51,18 @@ public class RedisConfig {
      *
      * <p>不使用容器内的 ObjectMapper，避免被 Web 层的配置（如 non_null 策略）影响，
      * 导致缓存反序列化时字段丢失。
+     *
+     * <p>⚠️ <b>刻意不开启 {@code activateDefaultTyping}（多态默认类型信息）</b>：
+     * 那会在 JSON 里写入 {@code @class} 之类的类型字段，反序列化时按名字实例化任意类 ——
+     * 只要攻击者能把一段 JSON 写进这些 Redis 键，就构成反序列化 gadget 链（RCE 面）。
+     * 本项目该模板只被健康探针写入常量字符串，不开类型信息反而更安全；
+     * 代价是反序列化回来的是 Map/List/String 而非原始对象，
+     * 若将来真的要用它缓存业务对象，请改用带白名单的
+     * {@code BasicPolymorphicTypeValidator} 而不是 LaissezFaireSubTypeValidator。
      */
     private ObjectMapper buildObjectMapper() {
         ObjectMapper mapper = new ObjectMapper();
         mapper.setVisibility(PropertyAccessor.ALL, JsonAutoDetect.Visibility.ANY);
-        // 记录类型信息，保证多态反序列化正确
-        mapper.activateDefaultTyping(
-                LaissezFaireSubTypeValidator.instance,
-                ObjectMapper.DefaultTyping.NON_FINAL,
-                com.fasterxml.jackson.annotation.JsonTypeInfo.As.PROPERTY
-        );
         mapper.registerModule(new JavaTimeModule());
         return mapper;
     }

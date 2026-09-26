@@ -95,7 +95,13 @@ function normalizeUri(value: string): string {
       return named[name.toLowerCase()] ?? `&${name};`
     })
   // 协议判定前剥离所有空白与控制字符："java\tscript:" 与 "javascript:" 等价
-  return decoded.replace(/[\u0000-\u0020\u007f]+/g, '')
+  const stripped = decoded.replace(/[\u0000-\u0020\u007f]+/g, '')
+  // ⚠️ 反斜杠必须归一成斜杠再做协议判定：
+  //    浏览器按 URL 规范（special scheme）把 `\` 当 `/`，所以 `/\evil.com`
+  //    会被解析成 `//evil.com`（协议相对 URL）。若这里不归一，
+  //    `\/(?!\/)` 只看到"单个斜杠 + 反斜杠"，会当成站内路径放行 —— 点击即跳外站，
+  //    图片则是每个访客的浏览器都向攻击者服务器发一次请求。
+  return stripped.replace(/\\/g, '/')
 }
 
 function codePoint(n: number): string {
