@@ -3,14 +3,15 @@
  * 全局布局：顶部导航 + 内容区。
  *
  * 结构：Header（sticky）→ 主内容 → Footer
- * 响应式：<768px 时侧栏收起、导航折行（详见 style 中的断点）
+ * 响应式：≤1100px 收起一级导航改走汉堡面板（含搜索框折行，详见 style 中的断点）
  */
-import { computed, onMounted, ref, watch } from 'vue'
-import { useRoute, useRouter } from 'vue-router'
+import { onMounted, ref, watch } from 'vue'
+import { useRoute, useRouter, type RouteLocationRaw } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { useAuthStore } from '@/stores/auth'
 import { useNotificationStore } from '@/stores/notification'
 import UserAvatar from '@/components/UserAvatar.vue'
+import LevelBadge from '@/components/LevelBadge.vue'
 
 const auth = useAuthStore()
 const router = useRouter()
@@ -81,16 +82,43 @@ async function onLogout() {
   router.push({ name: 'home' })
 }
 
-function onCreate() {
+/**
+ * 一级入口。
+ *
+ * `match` 用「路由名集合」而不是路径前缀：`/boards`（总览）与 `/boards/:slug`
+ * （某板块的帖子）是两个不同的 name，但都该让「板块」亮起来；`/tags` 与
+ * `/tags/:id` 同理。
+ *
+ * ⚠️ 热门 / 最新回复 **不在**顶栏 —— 它们是首页的排序 tab（`/?sort=hot`、
+ *    `/?sort=active`），摆在这里等于给同一个页面开三个一级入口。
+ */
+const NAV_ITEMS: { label: string; to: RouteLocationRaw; match: string[] }[] = [
+  { label: '首页', to: { name: 'home' }, match: ['home'] },
+  { label: '问答', to: { name: 'questions' }, match: ['questions'] },
+  { label: '板块', to: { name: 'boards' }, match: ['boards', 'board'] },
+  { label: '标签', to: { name: 'tags' }, match: ['tags', 'tag-detail'] },
+  // 关注流需要登录：守卫会带 redirect 去登录页，登录后回到本页
+  { label: '关注', to: { name: 'following' }, match: ['following'] },
+]
+
+/**
+ * 创作入口：0=发帖讨论，1=提个问题。
+ * 提问走 `/publish?type=1`，由编辑器读取 query 预选类型（避免"提问"藏在单选里没人发现）。
+ */
+function onCreate(type: number) {
+  const isQuestion = type === 1
   if (!auth.isLoggedIn) {
-    ElMessage.warning('请先登录后再发帖')
-    router.push({ name: 'login', query: { redirect: '/publish' } })
+    ElMessage.warning(isQuestion ? '请先登录后再提问' : '请先登录后再发帖')
+    router.push({
+      name: 'login',
+      query: { redirect: isQuestion ? '/publish?type=1' : '/publish' },
+    })
     return
   }
-  router.push({ name: 'post-create' })
+  router.push({ name: 'post-create', query: isQuestion ? { type: '1' } : {} })
 }
 
-const isActive = computed(() => (name: string) => route.name === name)
+const isActive = (names: string[]) => names.includes(String(route.name))
 </script>
 
 <template>
@@ -110,12 +138,19 @@ const isActive = computed(() => (name: string) => route.name === name)
           <span class="brand-name">Codelkup</span>
         </router-link>
 
-        <!-- 主导航 -->
+        <!-- 主导航（一级入口，5 个）。移动端点完后顺手收起面板，
+             否则新页面已经切换、面板还盖在内容上 -->
         <nav class="main-nav" :class="{ open: mobileNavOpen }">
-          <router-link :to="{ name: 'home' }" class="nav-link"
-                       :class="{ active: isActive('home') }">首页</router-link>
-          <router-link to="/?sort=hot" class="nav-link">热门</router-link>
-          <router-link to="/?sort=active" class="nav-link">最新回复</router-link>
+          <RouterLink
+            v-for="item in NAV_ITEMS"
+            :key="item.label"
+            :to="item.to"
+            class="nav-link"
+            :class="{ active: isActive(item.match) }"
+            @click="mobileNavOpen = false"
+          >
+            {{ item.label }}
+          </RouterLink>
         </nav>
 
         <!-- 搜索 -->
@@ -138,13 +173,24 @@ const isActive = computed(() => (name: string) => route.name === name)
 
         <!-- 右侧操作区 -->
         <div class="header-actions">
-          <el-button type="primary" class="btn-publish" @click="onCreate">
-            <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor"
-                 stroke-width="2.4" stroke-linecap="round" style="margin-right: 5px">
-              <path d="M12 5v14M5 12h14" />
-            </svg>
-            发布
-          </el-button>
+          <!-- 创作下拉：「提问」与「发帖」同级。
+               之前提问藏在编辑器的一个单选里，而提问 → 采纳 → 声望是社区的核心闭环，
+               该有一个显式入口（编辑器读 ?type=1 预选类型） -->
+          <el-dropdown trigger="click" placement="bottom-end" @command="onCreate">
+            <el-button type="primary" class="btn-publish">
+              <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor"
+                   stroke-width="2.4" stroke-linecap="round" style="margin-right: 5px">
+                <path d="M12 5v14M5 12h14" />
+              </svg>
+              <span class="btn-publish-label">创作</span>
+            </el-button>
+            <template #dropdown>
+              <el-dropdown-menu>
+                <el-dropdown-item :command="0">发帖讨论</el-dropdown-item>
+                <el-dropdown-item :command="1">提个问题</el-dropdown-item>
+              </el-dropdown-menu>
+            </template>
+          </el-dropdown>
 
           <!-- 通知铃铛（仅登录后显示）。角标数字由 aria-hidden 隐藏，
                未读数已写进按钮的 aria-label，避免屏幕阅读器重复播报 -->
@@ -187,11 +233,28 @@ const isActive = computed(() => (name: string) => route.name === name)
             </button>
             <template #dropdown>
               <el-dropdown-menu>
+                <!-- 身份一行：昵称 + 等级徽章 + 声望。数据与个人主页同源（都是 user 上的 level/reputation），
+                     不是两套数字 —— 顶栏只是换个位置再展示一次 -->
+                <div class="menu-user-meta">
+                  <span class="menu-user-name">{{ auth.user?.nickname }}</span>
+                  <LevelBadge :level="auth.user?.level" :reputation="auth.user?.reputation" />
+                  <span class="menu-user-rep">声望 {{ auth.user?.reputation ?? 0 }}</span>
+                </div>
                 <el-dropdown-item @click="router.push({ name: 'user-profile', params: { id: auth.user!.id } })">
                   我的主页
                 </el-dropdown-item>
-                <el-dropdown-item @click="router.push({ name: 'settings' })">
+                <!-- 菜单按用途分三组（用分隔线而非小标题：三条目一组时标题比内容还占地方）：
+                     内容组（我的主页 / 我的收藏）· 设置组（账号设置 / 管理端）· 退出
+                     ⚠️ 不放「我的帖子」：个人主页本来就是帖子列表，再加一个入口是同一页两遍 -->
+                <el-dropdown-item @click="router.push({ name: 'my-collections' })">
+                  我的收藏
+                </el-dropdown-item>
+                <el-dropdown-item divided @click="router.push({ name: 'settings' })">
                   账号设置
+                </el-dropdown-item>
+                <!-- 管理端入口：仅管理员可见（后端另有 @PreAuthorize 兜底） -->
+                <el-dropdown-item v-if="auth.isAdmin" @click="router.push({ name: 'admin' })">
+                  管理端
                 </el-dropdown-item>
                 <el-dropdown-item divided @click="onLogout">退出登录</el-dropdown-item>
               </el-dropdown-menu>
@@ -244,11 +307,12 @@ const isActive = computed(() => (name: string) => route.name === name)
   top: 0;
   z-index: 100;
   /* 半透明 + 模糊：滚动时内容从下方穿过，比不透明纯色条更有层次。
-     底部边界用极暗的 border-subtle，避免一条突兀的亮线。 */
-  background: rgba(18, 27, 46, 0.82);
-  backdrop-filter: blur(14px);
-  -webkit-backdrop-filter: blur(14px);
-  border-bottom: 1px solid var(--color-border-subtle);
+     ★ v3：底色改为令牌 --surface-header（与页面底色同源），并换成发丝边 ——
+     之前这里写死了 rgba(18,27,46,.82)（旧卡片色），底色一改就出现色差横带。 */
+  background: var(--surface-header);
+  backdrop-filter: blur(16px) saturate(140%);
+  -webkit-backdrop-filter: blur(16px) saturate(140%);
+  border-bottom: 1px solid var(--color-border-hairline);
 }
 
 .header-inner {
@@ -265,7 +329,7 @@ const isActive = computed(() => (name: string) => route.name === name)
   font-size: var(--text-lg);
   font-weight: 700;
   color: var(--color-foreground);
-  letter-spacing: -0.02em;
+  letter-spacing: var(--tracking-heading);
   flex-shrink: 0;
 }
 
@@ -273,23 +337,24 @@ const isActive = computed(() => (name: string) => route.name === name)
   color: var(--color-foreground);
 }
 
-/* 品牌标识：纯色方块 → 渐变块 + 外发光。
-   这是页面上最重要的"品牌资产"，值得一点存在感；
-   glow 用的是 accent 色，与全局强调色体系同源。 */
+/* 品牌标识：纯色方块 + 顶部内高光 + 一点品牌光晕。
+   ★ v3：去掉 `linear-gradient(145deg, accent, #6366f1)` 的蓝→靛双色渐变 ——
+   多色相渐变是"模板感"最强的信号之一；单一强调色 + 内高光更像品牌资产。
+   （品牌标识是全局唯一允许保留彩色光晕的地方，见 tokens.css 的说明。） */
 .brand-mark {
   display: grid;
   place-items: center;
   width: 30px;
   height: 30px;
   border-radius: var(--radius-md);
-  background: linear-gradient(145deg, var(--color-accent) 0%, #6366f1 100%);
+  background: var(--color-accent-solid);
+  box-shadow: var(--inset-highlight), 0 4px 16px -8px var(--color-accent-glow);
   color: #fff;
-  box-shadow: 0 4px 16px -5px var(--color-accent-glow);
   transition: box-shadow var(--transition-base), transform var(--transition-fast);
 }
 
 .brand:hover .brand-mark {
-  box-shadow: 0 6px 22px -5px var(--color-accent-glow);
+  box-shadow: var(--inset-highlight), 0 8px 24px -10px var(--color-accent-glow);
   transform: translateY(-1px);
 }
 
@@ -335,7 +400,9 @@ const isActive = computed(() => (name: string) => route.name === name)
 
 .search-box {
   flex: 1;
-  max-width: 340px;
+  /* ★ V0.4：340 → 300。一级入口从 3 个变 5 个，搜索框要让出一点宽度，
+     否则 1100px 附近会出现"导航、搜索、操作区三方抢宽度"的挤压 */
+  max-width: 300px;
   margin-left: auto;
 }
 
@@ -442,6 +509,28 @@ const isActive = computed(() => (name: string) => route.name === name)
   border-radius: var(--radius-md);
 }
 
+/* ---------- 用户菜单里的身份行 ---------- */
+.menu-user-meta {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  margin-bottom: var(--space-1);
+  padding: var(--space-2) var(--space-4) var(--space-2);
+  border-bottom: 1px solid var(--color-border-subtle);
+}
+
+.menu-user-name {
+  font-size: var(--text-sm);
+  font-weight: 600;
+  color: var(--color-foreground);
+}
+
+.menu-user-rep {
+  font-size: var(--text-xs);
+  color: var(--color-subtle-foreground);
+  font-variant-numeric: tabular-nums;
+}
+
 /* ---------- Main ---------- */
 .app-main {
   flex: 1;
@@ -469,13 +558,41 @@ const isActive = computed(() => (name: string) => route.name === name)
   color: var(--color-border);
 }
 
-/* ---------- 响应式：平板 ---------- */
-@media (max-width: 1024px) {
+/* ---------- 响应式：平板 / 窄屏 ----------
+   ★ V0.4：断点从 1024 提到 1100 —— 一级入口 3 → 5 个，1100 以内横排开始挤。
+   顺带修掉一个既有问题：原来 769~1024 这段区间导航被 display:none 隐藏、
+   汉堡按钮又是 display:none，导航在这段宽度里**根本打不开**；
+   现在汉堡跟着断点一起出现，这段区间不再有"无导航可用"的窗口。 */
+@media (max-width: 1100px) {
   .main-nav {
     display: none;
   }
+
   .search-box {
     max-width: none;
+  }
+
+  .nav-toggle {
+    display: grid;
+    place-items: center;
+  }
+
+  /* 导航展开为下拉面板 */
+  .main-nav.open {
+    display: flex;
+    position: absolute;
+    /* 相对 .app-header（sticky 即定位祖先）的 100%：头部无论多高都贴在它下方。
+       v3 之前写死 top: 58px，窄屏头部换行后正好落在搜索框上，链接点不到。 */
+    top: 100%;
+    left: 0;
+    right: 0;
+    flex-direction: column;
+    align-items: stretch;
+    gap: 0;
+    padding: var(--space-2);
+    background: var(--color-elevated);
+    border-bottom: 1px solid var(--color-border);
+    box-shadow: var(--shadow-md);
   }
 }
 
@@ -487,27 +604,6 @@ const isActive = computed(() => (name: string) => route.name === name)
 
   .brand-name {
     display: none;
-  }
-
-  .nav-toggle {
-    display: grid;
-    place-items: center;
-  }
-
-  /* 移动端导航展开为下拉面板 */
-  .main-nav.open {
-    display: flex;
-    position: absolute;
-    top: 58px;
-    left: 0;
-    right: 0;
-    flex-direction: column;
-    align-items: stretch;
-    gap: 0;
-    padding: var(--space-2);
-    background: var(--color-elevated);
-    border-bottom: 1px solid var(--color-border);
-    box-shadow: var(--shadow-md);
   }
 
   .search-box {
@@ -522,7 +618,10 @@ const isActive = computed(() => (name: string) => route.name === name)
     padding-bottom: var(--space-2);
   }
 
-  .btn-publish span {
+  /* ★ V0.4：原来写的是 .btn-publish span —— Element Plus 会把整个 slot
+     包在自己的 <span> 里，那条规则其实把按钮内容（含图标）全隐藏了，
+     窄屏只剩一个空蓝块。改成只隐藏我们的文字标签。 */
+  .btn-publish-label {
     display: none;
   }
 

@@ -37,10 +37,43 @@ const routes: RouteRecordRaw[] = [
     meta: { title: '编辑帖子', requiresAuth: true },
   },
   {
+    // 板块总览：与 /boards/:slug 是两件事 —— 前者是"有哪些板块"，后者是"某板块下的帖子"
+    path: '/boards',
+    name: 'boards',
+    component: () => import('@/views/board/BoardListView.vue'),
+    meta: { title: '板块' },
+  },
+  {
     path: '/boards/:slug',
     name: 'board',
     component: () => import('@/views/home/HomeView.vue'),
     meta: { title: '板块' },
+  },
+  {
+    // 问答专区：type=1（提问）的独立落点。后端 type/solved 早已支持，这里只是给它一级入口
+    path: '/questions',
+    name: 'questions',
+    component: () => import('@/views/question/QuestionListView.vue'),
+    meta: { title: '问答' },
+  },
+  {
+    path: '/tags',
+    name: 'tags',
+    component: () => import('@/views/tag/TagListView.vue'),
+    meta: { title: '标签' },
+  },
+  {
+    path: '/tags/:id(\\d+)',
+    name: 'tag-detail',
+    component: () => import('@/views/tag/TagDetailView.vue'),
+    meta: { title: '标签' },
+  },
+  {
+    // 关注流：独立落点（此前只是首页的 ?sort=following 排序 tab）
+    path: '/following',
+    name: 'following',
+    component: () => import('@/views/feed/FollowingView.vue'),
+    meta: { title: '关注', requiresAuth: true },
   },
   {
     path: '/search',
@@ -65,6 +98,21 @@ const routes: RouteRecordRaw[] = [
     name: 'settings',
     component: () => import('@/views/user/SettingsView.vue'),
     meta: { title: '账号设置', requiresAuth: true },
+  },
+  {
+    // 我的收藏：登录后可用。路径用 /me/collections 与后端 /api/users/me/collections 对齐
+    path: '/me/collections',
+    name: 'my-collections',
+    component: () => import('@/views/me/CollectionsView.vue'),
+    meta: { title: '我的收藏', requiresAuth: true },
+  },
+  {
+    // 管理端：置顶/加精与计数重建。守卫是双重的 —— 前端 requiresAdmin 只负责体验，
+    // 真正的边界在后端（@PreAuthorize("hasRole('ADMIN')")）
+    path: '/admin',
+    name: 'admin',
+    component: () => import('@/views/admin/AdminView.vue'),
+    meta: { title: '管理端', requiresAuth: true, requiresAdmin: true },
   },
   {
     path: '/login',
