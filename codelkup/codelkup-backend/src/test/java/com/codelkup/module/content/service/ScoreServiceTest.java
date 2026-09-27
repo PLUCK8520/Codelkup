@@ -1,6 +1,7 @@
 package com.codelkup.module.content.service;
 
 import com.codelkup.module.content.mapper.PostMapper;
+import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.test.util.ReflectionTestUtils;
@@ -25,12 +26,16 @@ import static org.mockito.Mockito.when;
 class ScoreServiceTest {
 
     private PostMapper postMapper;
+    private SimpleMeterRegistry registry;
     private ScoreService service;
 
     @BeforeEach
     void setUp() {
         postMapper = mock(PostMapper.class);
-        service = new ScoreService(postMapper);
+        registry = new SimpleMeterRegistry();
+        service = new ScoreService(postMapper, registry);
+        // @PostConstruct 在单测里不会自动执行（没有 Spring 容器），手动调一次
+        service.registerMetrics();
     }
 
     @Test
@@ -71,5 +76,32 @@ class ScoreServiceTest {
         service.recalcScheduled();
 
         verify(postMapper).recalcScores(anyInt(), anyInt(), anyInt(), anyDouble());
+    }
+
+    // ==================== M3-10 指标 ====================
+
+    @Test
+    void recalcOnce_recordsTimerAndLastAffectedRows() {
+        when(postMapper.recalcScores(anyInt(), anyInt(), anyInt(), anyDouble())).thenReturn(10000);
+
+        // 未跑过时 Gauge 应为 -1（与"跑过且 0 行"区分开）
+        assertEquals(-1, registry.get("codelkup.score.last_affected_rows").gauge().value());
+
+        service.recalcOnce();
+
+        assertEquals(10000, registry.get("codelkup.score.last_affected_rows").gauge().value());
+        assertEquals(1, registry.get("codelkup.score.rebuild").timer().count(),
+                "每次重算都应落一次计时样本");
+    }
+
+    @Test
+    void recalcOnce_failureCountsFailedMeter() {
+        when(postMapper.recalcScores(anyInt(), anyInt(), anyInt(), anyDouble()))
+                .thenThrow(new RuntimeException("db is down"));
+
+        service.recalcOnce();
+
+        // 失败必须有独立的计数器：只靠日志（生产是 INFO 级、且没人盯）发现不了"一直在失败"
+        assertEquals(1, registry.get("codelkup.score.rebuild.failed").counter().count());
     }
 }

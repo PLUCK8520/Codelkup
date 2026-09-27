@@ -73,10 +73,18 @@ public record NotificationEvent(
                 Notification.TARGET_POST, postId, null);
     }
 
-    /** 点赞了你的评论 */
-    public static NotificationEvent likeComment(Long receiverId, Long senderId, Long postId) {
+    /**
+     * 点赞了你的评论。
+     *
+     * <p>⚠️ 目标是<b>评论</b>而不是帖子（第三轮审计修正）：此前与 {@link #likePost}
+     * 发出了完全相同的五元组（type=3 + targetType=帖子 + targetId=帖子），
+     * 后果有二 —— ① 去重（同源未读只留一条）把"先赞帖子、再赞该帖评论"的第二条
+     * 当成重复吃掉；② 文案一律是"赞了你的帖子"，对评论点赞是错的。
+     * 跳转不受影响：通知列表由服务端 JOIN 出 {@code targetPostId}，前端仍跳到帖子。
+     */
+    public static NotificationEvent likeComment(Long receiverId, Long senderId, Long commentId) {
         return new NotificationEvent(receiverId, senderId, Notification.TYPE_LIKE,
-                Notification.TARGET_POST, postId, null);
+                Notification.TARGET_COMMENT, commentId, null);
     }
 
     /** 采纳了你的回答 */

@@ -8,17 +8,23 @@ import com.codelkup.module.user.dto.PasswordChangeRequest;
 import com.codelkup.module.user.dto.ProfileUpdateRequest;
 import com.codelkup.module.user.service.UserService;
 import com.codelkup.module.user.vo.CurrentUserVO;
+import com.codelkup.module.user.vo.RankingUserVO;
 import com.codelkup.module.user.vo.UserVO;
 import com.codelkup.security.CurrentUser;
 import com.codelkup.security.RateLimitService;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import jakarta.validation.Valid;
+import jakarta.validation.constraints.Max;
+import jakarta.validation.constraints.Min;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.validation.annotation.Validated;
 import org.springframework.web.bind.annotation.*;
 import org.springframework.web.multipart.MultipartFile;
+
+import java.util.List;
 
 /**
  * 用户资料接口。
@@ -34,6 +40,7 @@ import org.springframework.web.multipart.MultipartFile;
  * @author 刘
  */
 @Slf4j
+@Validated
 @Tag(name = "用户", description = "用户主页与个人资料")
 @RestController
 @RequestMapping("/api/users")
@@ -48,6 +55,26 @@ public class UserController {
     @Value("${codelkup.rate-limit.upload-per-hour:30}")
     private int uploadPerHour;
 
+    /** 资料修改限流（L-4 补齐）：默认 30 次/小时/用户 —— 昵称/简介是公开展示面 */
+    @Value("${codelkup.rate-limit.profile-per-hour:30}")
+    private int profilePerHour;
+
+    /**
+     * 声望榜。
+     *
+     * <p>⚠️ 声明在 {@code /{id}} 之前：Spring 按"字面量优先"匹配，顺序其实不影响结果，
+     * 但放在前面读的人不必先怀疑一次路由冲突。与已有的 {@code /me} 是同一类情形。
+     */
+    @Operation(summary = "声望榜",
+            description = "公开接口，按声望倒序取前 N 名；只列未注销/未封禁且声望大于 0 的账号，并列按 id 定序")
+    @GetMapping("/ranking")
+    public Result<List<RankingUserVO>> ranking(
+            @RequestParam(defaultValue = "20")
+            @Min(value = 1, message = "至少取 1 名")
+            @Max(value = 50, message = "最多取 50 名") Integer limit) {
+        return Result.success(userService.topByReputation(limit));
+    }
+
     @Operation(summary = "查看他人主页", description = "公开接口，返回信息不含邮箱")
     @GetMapping("/{id}")
     public Result<UserVO> getProfile(@PathVariable Long id) {
@@ -60,10 +87,14 @@ public class UserController {
         return Result.success(userService.getCurrentUserProfile(userId));
     }
 
-    @Operation(summary = "修改本人资料", description = "字段可选；不支持改邮箱与密码（需走独立流程）")
+    @Operation(summary = "修改本人资料", description = "字段可选；不支持改邮箱与密码（需走独立流程）。按用户限流（默认 30 次/小时）")
     @PutMapping("/me")
     public Result<CurrentUserVO> updateMe(@Valid @RequestBody ProfileUpdateRequest body,
                                           @CurrentUser(required = true) Long userId) {
+        // L-4 补齐：昵称/简介直接公开展示，防高频篡改（也顺带压住"改昵称骚扰"类玩法）
+        if (!rateLimitService.tryAcquire("profile", "u:" + userId, profilePerHour, 60)) {
+            throw new BusinessException(ErrorCode.TOO_MANY_REQUESTS);
+        }
         return Result.success(userService.updateProfile(userId, body));
     }
 

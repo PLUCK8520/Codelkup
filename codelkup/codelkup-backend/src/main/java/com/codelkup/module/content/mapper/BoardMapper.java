@@ -8,6 +8,7 @@ import org.apache.ibatis.annotations.Select;
 import org.apache.ibatis.annotations.Update;
 
 import java.util.List;
+import java.util.Map;
 
 /**
  * 板块 Mapper。
@@ -30,4 +31,17 @@ public interface BoardMapper extends BaseMapper<Board> {
      */
     @Update("UPDATE t_board SET post_count = GREATEST(post_count + #{delta}, 0) WHERE id = #{boardId}")
     int addPostCount(@Param("boardId") Long boardId, @Param("delta") int delta);
+
+    /**
+     * 正常板块数 + 帖子数总和（对应 /api/stats）。
+     *
+     * <p>{@code post_total} 的口径与板块卡片上各 {@code post_count} 之和完全一致 ——
+     * 页面里"共 N 篇讨论"与卡片数字必须是同一套账，否则用户把卡片加一遍就对不上。
+     *
+     * <p>一条 SQL 出两列：两次查询之间若有板块上下线，会出现"板块数变了、总数没变"
+     * 的跨时刻快照（与 countQuestionStats 的考量一致）。
+     */
+    @Select("SELECT COUNT(*) AS board_count, COALESCE(SUM(post_count), 0) AS post_total "
+            + "FROM t_board WHERE status = 0")
+    Map<String, Object> countEnabledStats();
 }

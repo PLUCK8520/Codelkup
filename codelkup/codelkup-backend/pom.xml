@@ -23,7 +23,24 @@
         <mybatis-plus.version>3.5.9</mybatis-plus.version>
         <jjwt.version>0.12.6</jjwt.version>
         <springdoc.version>2.8.6</springdoc.version>
+        <spring-ai.version>1.0.3</spring-ai.version>
     </properties>
+
+    <!--
+      Spring AI 用 BOM 管版本：它自己的模块（spring-ai-openai → spring-ai-model /
+      spring-ai-commons / spring-ai-retry）由 BOM 统一对齐，避免手动逐个写版本号。
+    -->
+    <dependencyManagement>
+        <dependencies>
+            <dependency>
+                <groupId>org.springframework.ai</groupId>
+                <artifactId>spring-ai-bom</artifactId>
+                <version>${spring-ai.version}</version>
+                <type>pom</type>
+                <scope>import</scope>
+            </dependency>
+        </dependencies>
+    </dependencyManagement>
 
     <dependencies>
         <!-- Web -->
@@ -60,6 +77,39 @@
         <dependency>
             <groupId>org.springframework.boot</groupId>
             <artifactId>spring-boot-starter-actuator</artifactId>
+        </dependency>
+
+        <!-- 指标导出（M3-10）：Prometheus 抓取格式。
+             ⚠️ /actuator/prometheus 只在**容器网络内**可达：
+             compose 不映射后端端口，nginx 另有一条 `location /actuator/ { return 404; }`
+             显式挡在公网之外（见 DEPLOY.md §9.4）—— 指标里有业务量级与错误分布，
+             不该出现在公网。 -->
+        <dependency>
+            <groupId>io.micrometer</groupId>
+            <artifactId>micrometer-registry-prometheus</artifactId>
+        </dependency>
+
+        <!--
+          Spring AI（M3-11：AiClient 的**第二实现**，用 codelkup.ai.impl 切换）。
+
+          为什么只引 spring-ai-openai 而不是 starter（spring-ai-starter-model-openai）：
+            ① starter 会带来一整套自动配置，它启动时就要求 spring.ai.openai.api-key 非空 ——
+               而本项目"没配 key"是**正常状态**（available()=false，接口降级）；为了迁就自动配置
+               就得塞一个假 key，等于把"密钥可以没有"这件事写坏。
+            ② 我们的配置口径是 codelkup.ai.*，再引入第二套 spring.ai.* 键就会出现
+               "同一个东西两处配置、早晚改一处漏一处"（与 AiCallGuard 抽出来是同一个理由）。
+            手动构建 OpenAiApi/OpenAiChatModel 后，两个实现读同一份 AiSettings。
+
+          ⚠️ 代价（实测：6 个 jar / 合计 0.8 MB —— spring-ai-openai、-model、-commons、
+             -template-st、-retry 与 spring-retry；reactor-core 本来就随 Lettuce 在，
+             不算新增）。它重试机制（spring-retry）与"不重试"的项目口径相反，
+             所以本实现显式把 RetryTemplate 设成 maxAttempts=1。
+             这也是**默认仍是自写 RestClient 版**（codelkup.ai.impl=rest）的原因 ——
+             ADR-1 的取舍见 DEV-DOC §10.6。
+        -->
+        <dependency>
+            <groupId>org.springframework.ai</groupId>
+            <artifactId>spring-ai-openai</artifactId>
         </dependency>
 
         <!-- ORM: MyBatis-Plus（Spring Boot 3 专用 starter） -->

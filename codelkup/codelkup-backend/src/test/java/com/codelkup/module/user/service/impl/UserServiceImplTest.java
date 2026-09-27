@@ -5,6 +5,7 @@ import com.codelkup.common.result.ErrorCode;
 import com.codelkup.module.content.mapper.PostMapper;
 import com.codelkup.module.user.dto.PasswordChangeRequest;
 import com.codelkup.module.user.entity.User;
+import com.codelkup.module.user.event.UserSessionRevokedEvent;
 import com.codelkup.module.user.mapper.UserMapper;
 import com.codelkup.security.JwtTokenProvider;
 import com.codelkup.security.LoginAttemptService;
@@ -12,12 +13,15 @@ import com.codelkup.security.TokenStore;
 import io.jsonwebtoken.Claims;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.security.crypto.password.PasswordEncoder;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
@@ -26,13 +30,15 @@ import static org.mockito.Mockito.when;
 /**
  * 修改密码的单元测试。
  *
- * <p>钉死四条不变量（每一条都对应一种真实的账号接管路径）：
+ * <p>钉死五条不变量（每一条都对应一种真实的账号接管路径）：
  * <ol>
  *   <li>原密码错 → 拒绝，且<b>不落库</b></li>
  *   <li>新密码与原密码相同 → 拒绝（用户会误以为改成功了）</li>
  *   <li>成功时新密码必须以<b>哈希</b>入库，绝不存明文</li>
  *   <li>成功后必须清 refresh 白名单 <b>且拉黑当前 accessToken</b> ——
  *       否则"改密"对当前这个被盗会话毫无作用</li>
+ *   <li>成功后必须广播 {@link UserSessionRevokedEvent}（F2）—— HTTP 凭证撤销管不到
+ *       已建立的 SSE 长连接，不广播则被盗会话继续白拿实时通知</li>
  * </ol>
  */
 class UserServiceImplTest {
@@ -46,6 +52,7 @@ class UserServiceImplTest {
     private PasswordEncoder passwordEncoder;
     private JwtTokenProvider jwtTokenProvider;
     private TokenStore tokenStore;
+    private ApplicationEventPublisher eventPublisher;
     private UserServiceImpl service;
 
     @BeforeEach
@@ -54,10 +61,11 @@ class UserServiceImplTest {
         passwordEncoder = mock(PasswordEncoder.class);
         jwtTokenProvider = mock(JwtTokenProvider.class);
         tokenStore = mock(TokenStore.class);
+        eventPublisher = mock(ApplicationEventPublisher.class);
         // PostMapper 只为公开主页的提问统计服务（M2-14 新增的构造参数），
         // 本测试覆盖的是改密流程，用 mock 传进去即可 —— 统计失败会被 Service 吞掉
         service = new UserServiceImpl(userMapper, passwordEncoder, jwtTokenProvider, tokenStore,
-                mock(LoginAttemptService.class), mock(PostMapper.class));
+                mock(LoginAttemptService.class), mock(PostMapper.class), eventPublisher);
 
         User user = new User();
         user.setId(USER_ID);
@@ -82,6 +90,8 @@ class UserServiceImplTest {
         assertEquals(ErrorCode.BAD_CREDENTIALS, e.getErrorCode());
         verify(userMapper, never()).updateById(any(User.class));
         verify(tokenStore, never()).removeRefreshToken(any());
+        // 失败路径不得动任何撤销动作（计数/黑名单/水位/事件全都不该发生）
+        verify(eventPublisher, never()).publishEvent(any(Object.class));
     }
 
     @Test
@@ -111,6 +121,10 @@ class UserServiceImplTest {
         // 全端失效：refresh 白名单清空 + 当前 accessToken 拉黑
         verify(tokenStore).removeRefreshToken(USER_ID);
         verify(tokenStore).blacklistAccessToken(claims);
+        // L-3 水位：把其他设备手里还没过期的 access 一并作废（只断言被调用，水位的秒值由集成脚本验证）
+        verify(tokenStore).revokeAccessBefore(eq(USER_ID), anyLong());
+        // F2：广播会话撤销事件 —— 由通知模块监听并关闭该用户全部 SSE 长连接
+        verify(eventPublisher).publishEvent(new UserSessionRevokedEvent(USER_ID));
     }
 
     @Test

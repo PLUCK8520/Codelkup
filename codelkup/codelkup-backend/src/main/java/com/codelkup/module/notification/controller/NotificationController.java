@@ -3,6 +3,7 @@ package com.codelkup.module.notification.controller;
 import com.codelkup.common.result.PageResult;
 import com.codelkup.common.result.Result;
 import com.codelkup.module.notification.service.NotificationService;
+import com.codelkup.module.notification.vo.NotificationTypeUnreadVO;
 import com.codelkup.module.notification.vo.NotificationVO;
 import com.codelkup.module.user.entity.User;
 import com.codelkup.security.CurrentUser;
@@ -19,6 +20,8 @@ import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
+
+import java.util.List;
 
 /**
  * 站内通知接口（Sprint 4）。
@@ -39,16 +42,26 @@ public class NotificationController {
 
     private final NotificationService notificationService;
 
-    @Operation(summary = "通知列表", description = "按时间倒序；onlyUnread=true 只看未读")
+    @Operation(summary = "通知列表",
+            description = "按时间倒序；onlyUnread=true 只看未读；"
+                    + "type 按类型分组筛选（可重复或逗号分隔，如 type=1,2），省略即全部类型")
     @GetMapping
     public Result<PageResult<NotificationVO>> list(
             @CurrentUser(required = true) Long userId,
             @RequestParam(defaultValue = "false") boolean onlyUnread,
+            @RequestParam(required = false) List<Integer> type,
             @RequestParam(defaultValue = "1") @Min(value = 1, message = "页码最小为 1") Integer page,
             @RequestParam(defaultValue = "20")
             @Min(value = 1, message = "每页最少 1 条")
             @Max(value = 50, message = "每页最多 50 条") Integer size) {
-        return Result.success(notificationService.list(userId, onlyUnread, page, size));
+        return Result.success(notificationService.list(userId, onlyUnread, type, page, size));
+    }
+
+    @Operation(summary = "各类型未读数",
+            description = "通知中心的分组角标。只返回有未读的类型（缺的按 0 处理）")
+    @GetMapping("/unread-counts")
+    public Result<List<NotificationTypeUnreadVO>> unreadCounts(@CurrentUser(required = true) Long userId) {
+        return Result.success(notificationService.unreadCounts(userId));
     }
 
     @Operation(summary = "未读数", description = "顶栏红点角标")

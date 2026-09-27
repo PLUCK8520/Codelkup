@@ -8,6 +8,11 @@ uploads/
 .idea/
 .vscode/
 
+# ⚠️ dev 配置绝不进镜像（第三轮审计）：application-dev.yml 里写着本地 DB 密码与
+#    dev JWT secret，而 Dockerfile 是 `COPY src` + 容器内 mvn package ——
+#    不排除就会被打进 jar（prod profile 虽不激活它，但密钥仍留在镜像层里可取）。
+src/main/resources/application-dev.yml
+
 # 验收/开发脚本不需要进镜像
 verify-sprint*.py
 smoke-search.py

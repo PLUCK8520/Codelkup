@@ -2,11 +2,13 @@ package com.codelkup.config;
 
 import com.codelkup.security.JwtAuthenticationFilter;
 import com.codelkup.security.SecurityHandlers;
+import jakarta.servlet.http.HttpServletRequest;
 import lombok.RequiredArgsConstructor;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.http.HttpMethod;
+import org.springframework.security.authorization.AuthorizationDecision;
 import org.springframework.security.config.annotation.method.configuration.EnableMethodSecurity;
 import org.springframework.security.config.annotation.web.builders.HttpSecurity;
 import org.springframework.security.config.annotation.web.configuration.EnableWebSecurity;
@@ -72,11 +74,29 @@ public class SecurityConfig {
                         .requestMatchers(HttpMethod.OPTIONS, "/**").permitAll()
 
                         // ---- 认证接口：完全公开 ----
+                        // ⚠️ 例外必须排在它前面：签发 SSE ticket 需要登录态。
+                        //    ticket 是给 EventSource 用的短期凭证（它无法带 Header），
+                        //    签发它的人必须先是已登录用户；Spring Security 按声明顺序匹配，
+                        //    这一条若写到 /api/auth/** 之后就永远轮不到。
+                        .requestMatchers(HttpMethod.POST, "/api/auth/sse-ticket").authenticated()
                         .requestMatchers("/api/auth/**").permitAll()
 
                         // ---- 系统接口 ----
-                        .requestMatchers("/api/system/health").permitAll()
+                        .requestMatchers("/api/system/health", "/api/system/config").permitAll()
                         .requestMatchers("/actuator/health", "/actuator/info").permitAll()
+
+                        // ---- 指标端点：只对"内部来源"开放（M3-10）----
+                        // 为什么不是 permitAll：指标里有业务量级、错误分布与调用成本，
+                        // "公网抓不到"应当由**这里**保证，而不是只靠"部署时没人把端口暴露出去"。
+                        // 为什么按来源地址而不是登录态：Prometheus 抓取器没有本站账号体系，
+                        // 而它只可能位于容器网络或本机 —— 来源地址就是最贴合的凭证。
+                        // ⚠️ 经 nginx 转发时 getRemoteAddr() 拿到的是 XFF 里的**真实客户端地址**
+                        //    （server.forward-headers-strategy=native，且直连对端是可信私网代理），
+                        //    因此即便公网请求被反代到后端也会因源地址是公网而被拒；
+                        //    nginx 侧另有一条 `location /actuator/ { return 404; }` 作为第一道。
+                        .requestMatchers("/actuator/prometheus")
+                        .access((authentication, context) ->
+                                new AuthorizationDecision(isInternalAddress(context.getRequest())))
 
                         // ---- API 文档 ----
                         .requestMatchers(
@@ -91,6 +111,9 @@ public class SecurityConfig {
                         .requestMatchers(HttpMethod.GET, "/uploads/**").permitAll()
 
                         // ---- 游客可读的内容（GET 只读接口）----
+                        // 站点汇总统计：首页 / 问答 / 标签 / 板块页的公共计数，
+                        // 数字全部来自游客本就能看到的列表与字典，单独放行。
+                        .requestMatchers(HttpMethod.GET, "/api/stats").permitAll()
                         .requestMatchers(HttpMethod.GET, "/api/boards/**").permitAll()
                         .requestMatchers(HttpMethod.GET, "/api/tags/**").permitAll()
                         .requestMatchers(HttpMethod.GET, "/api/posts/**").permitAll()
@@ -101,6 +124,11 @@ public class SecurityConfig {
                         //    非 GET，落到 anyRequest().authenticated()，需登录。
                         .requestMatchers(HttpMethod.GET, "/api/search/**").permitAll()
                         .requestMatchers(HttpMethod.GET, "/api/feed/**").permitAll()
+                        // ---- SSE 通知流：鉴权改走一次性 ticket ----
+                        // ⚠️ 放行的是"过滤器链的授权"，不是"免鉴权"：EventSource 不能带
+                        //    Authorization 头，所以凭证（一次性 ticket）由 SseController
+                        //    在处理器内校验 —— 没有合法 ticket 一律 40101。
+                        .requestMatchers(HttpMethod.GET, "/api/notifications/stream").permitAll()
                         // 用户主页：公开可读（返回 UserVO，不含邮箱），
                         // 与 /api/users/me 形成对照 —— 后者含邮箱，必须登录。
                         .requestMatchers(HttpMethod.GET, "/api/users/*/posts").permitAll()
@@ -137,6 +165,36 @@ public class SecurityConfig {
                 .logout(AbstractHttpConfigurer::disable);
 
         return http.build();
+    }
+
+    /**
+     * 是否为"内部来源"地址：回环 + RFC1918 私网（本机 / 容器网络 / 局域网）。
+     *
+     * <p>只认这四个网段，其余（公网地址、以及无法归入私网的 IPv6）一律拒绝 ——
+     * 与本类的白名单风格一致：默认拒绝，显式放行。
+     */
+    private static boolean isInternalAddress(HttpServletRequest request) {
+        String ip = request.getRemoteAddr();
+        if (ip == null) {
+            return false;
+        }
+        if ("::1".equals(ip) || "0:0:0:0:0:0:0:1".equals(ip)) {
+            return true;   // IPv6 回环（Windows 上实测会写成这种全零展开形式）
+        }
+        String[] parts = ip.split("\\.");
+        if (parts.length != 4) {
+            return false;   // 其它 IPv6 地址：本项目部署未使用 IPv6 私网
+        }
+        try {
+            int a = Integer.parseInt(parts[0]);
+            int b = Integer.parseInt(parts[1]);
+            return a == 127                                  // 127.0.0.0/8   回环
+                    || a == 10                               // 10.0.0.0/8
+                    || (a == 172 && b >= 16 && b <= 31)      // 172.16.0.0/12 Docker 网桥默认落在此段
+                    || (a == 192 && b == 168);               // 192.168.0.0/16
+        } catch (NumberFormatException e) {
+            return false;   // 非法段（比如被塞了字母）→ 拒绝
+        }
     }
 
     @Bean

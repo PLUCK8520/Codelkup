@@ -9,9 +9,11 @@ import com.codelkup.module.user.dto.ProfileUpdateRequest;
 import com.codelkup.module.user.dto.RegisterRequest;
 import com.codelkup.module.user.dto.TokenResponse;
 import com.codelkup.module.user.entity.User;
+import com.codelkup.module.user.event.UserSessionRevokedEvent;
 import com.codelkup.module.user.mapper.UserMapper;
 import com.codelkup.module.user.service.UserService;
 import com.codelkup.module.user.vo.CurrentUserVO;
+import com.codelkup.module.user.vo.RankingUserVO;
 import com.codelkup.module.user.vo.UserVO;
 import com.codelkup.security.JwtTokenProvider;
 import com.codelkup.security.LoginAttemptService;
@@ -20,12 +22,15 @@ import io.jsonwebtoken.Claims;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.BeanUtils;
+import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.dao.DuplicateKeyException;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.time.Instant;
 import java.time.LocalDateTime;
+import java.util.List;
 import java.util.Map;
 
 /**
@@ -45,6 +50,26 @@ public class UserServiceImpl implements UserService {
     private final LoginAttemptService loginAttemptService;
     /** 只用于主页的提问统计（一条 COUNT 聚合），见 fillQuestionStats 的说明 */
     private final PostMapper postMapper;
+    /** 会话撤销后广播 {@link UserSessionRevokedEvent}，由通知模块监听并关闭 SSE 长连接（F2） */
+    private final ApplicationEventPublisher eventPublisher;
+
+    // ==================== 声望榜（V0.4） ====================
+
+    /**
+     * 声望榜（只读）。
+     *
+     * <p>名次在服务端写进 VO，而不是让前端用数组下标 +1：
+     * 名次是榜单的核心数据，且将来若给榜单加分页，名次必须等于"偏移量 + 下标"，
+     * 那时前端算就错了。多写这三行，换来的是"前端永远不用知道分页细节"。
+     */
+    @Override
+    public List<RankingUserVO> topByReputation(int limit) {
+        List<RankingUserVO> list = userMapper.selectTopByReputation(limit);
+        for (int i = 0; i < list.size(); i++) {
+            list.get(i).setRank(i + 1);
+        }
+        return list;
+    }
 
     // ==================== 注册 ====================
 
@@ -126,7 +151,7 @@ public class UserServiceImpl implements UserService {
         }
 
         Long userId = jwtTokenProvider.getUserId(claims);
-        if (userId == null || !tokenStore.isRefreshTokenValid(userId, refreshToken)) {
+        if (userId == null) {
             throw new BusinessException(ErrorCode.TOKEN_INVALID);
         }
 
@@ -135,8 +160,14 @@ public class UserServiceImpl implements UserService {
             throw new BusinessException(ErrorCode.ACCOUNT_DISABLED);
         }
 
-        // 重新签发一对新 token（refresh 也轮换，安全性更高）
-        return issueTokens(user);
+        // 签发新对，再**原子 CAS 轮换**白名单（F1，第二轮审计）：校验与写回必须是
+        // 一个动作 —— 否则与改密的"删除白名单"并发时，删除后的写回会让被盗 refresh
+        // 的会话复活（"改密=踢下线"失效）。
+        TokenResponse tokens = buildTokens(user);
+        if (!tokenStore.rotateRefreshToken(userId, refreshToken, tokens.getRefreshToken())) {
+            throw new BusinessException(ErrorCode.TOKEN_INVALID);
+        }
+        return tokens;
     }
 
     // ==================== 登出 ====================
@@ -160,13 +191,22 @@ public class UserServiceImpl implements UserService {
     @Override
     @Transactional(rollbackFor = Exception.class)
     public void changePassword(Long userId, PasswordChangeRequest request, String accessToken) {
+        // 失败锁定（M-1 修复）：与登录同一口径 —— 先判锁定、再做密码比对。
+        // 少了这道闸门，持有有效凭证者可无限次猜"原密码"，猜中即改密接管账号
+        // （安全审计实测：修复前连续 8 次错误原密码全部 40104，永不锁定）。
+        loginAttemptService.checkPasswordChangeNotLocked(userId);
+
         User user = getEntityById(userId);
 
         // 第一步：验原密码。既是安全闸门，也是"操作者确实是本人"的二次确认
         if (!passwordEncoder.matches(request.getOldPassword(), user.getPassword())) {
-            log.warn("修改密码失败：原密码不正确 | userId={}", userId);
+            loginAttemptService.recordPasswordChangeFailure(userId);
+            log.warn("修改密码失败：原密码不正确 | userId={} | 已累加失败计数", userId);
             throw new BusinessException(ErrorCode.BAD_CREDENTIALS, "原密码不正确");
         }
+        // 比对通过即清零（与 login 相同："成功一次就清零"）；
+        // 下面的"新旧相同"属于参数问题而非凭证失败，不应计数
+        loginAttemptService.clearPasswordChangeFailure(userId);
         // 新旧相同没有意义，而且会让用户误以为"改了"（真实场景里很常见）
         if (passwordEncoder.matches(request.getNewPassword(), user.getPassword())) {
             throw new BusinessException(ErrorCode.PARAM_ERROR, "新密码不能与原密码相同");
@@ -177,11 +217,15 @@ public class UserServiceImpl implements UserService {
         update.setPassword(passwordEncoder.encode(request.getNewPassword()));
         userMapper.updateById(update);
 
-        // 第二步：让所有既有凭证失效。
+        // 第二步：让所有既有凭证失效（四条一起，才配得上"改密=把别人踢下线"）。
         //   1) 清 refresh 白名单 —— 其他设备再也不能刷新（本项目是单槽位，等于全端下线）
-        //   2) 拉黑当前 accessToken —— 连"本次请求携带的这枚"也作废，
-        //      强制用新密码重新登录。少了这一步，改密后旧会话还能继续用 30 分钟，
-        //      而"改密"在用户心里意味着"把别人踢下线"。
+        //   2) 拉黑当前 accessToken —— 连"本次请求携带的这枚"也立即作废
+        //   3) 用户级撤销水位（L-3 修复）—— 把**其他设备**手里还没过期的 access 一并作废：
+        //      只有 (1)(2) 时，别的设备还能拿旧 access 活到自然过期（≤30 分钟）。
+        //      水位按秒记、过滤器严格小于才拒 —— 本秒内新登录签发的 token 不受影响。
+        //   4) 广播会话撤销事件（F2 修复）—— 上面三条管住的是"新的 HTTP 请求"，
+        //      管不住已经建立的 SSE 长连接（握手后不再校验凭证）。由通知模块的
+        //      监听器关掉该用户全部 SSE 流，否则被盗会话能继续白拿实时通知。
         tokenStore.removeRefreshToken(userId);
         if (accessToken != null) {
             Claims claims = jwtTokenProvider.parse(accessToken);
@@ -189,8 +233,10 @@ public class UserServiceImpl implements UserService {
                 tokenStore.blacklistAccessToken(claims);
             }
         }
+        tokenStore.revokeAccessBefore(userId, Instant.now().getEpochSecond());
+        eventPublisher.publishEvent(new UserSessionRevokedEvent(userId));
 
-        log.info("修改密码 | userId={} | 已清除 refresh 白名单并拉黑当前 accessToken", userId);
+        log.info("修改密码 | userId={} | 已清除 refresh 白名单、拉黑当前 accessToken、写入撤销水位并关闭 SSE 连接", userId);
     }
 
     // ==================== 查询 ====================
@@ -305,9 +351,15 @@ public class UserServiceImpl implements UserService {
     }
 
     private TokenResponse issueTokens(User user) {
+        TokenResponse tokens = buildTokens(user);
+        tokenStore.saveRefreshToken(user.getId(), tokens.getRefreshToken());
+        return tokens;
+    }
+
+    /** 只签发、不落白名单 —— refresh 的 CAS 轮换需要自己原子写回（F1） */
+    private TokenResponse buildTokens(User user) {
         String accessToken = jwtTokenProvider.createAccessToken(user.getId());
         String refreshToken = jwtTokenProvider.createRefreshToken(user.getId());
-        tokenStore.saveRefreshToken(user.getId(), refreshToken);
         return new TokenResponse(
                 accessToken, refreshToken,
                 jwtTokenProvider.getAccessTtlSeconds(),

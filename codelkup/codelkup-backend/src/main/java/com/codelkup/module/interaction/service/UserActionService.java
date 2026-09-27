@@ -77,6 +77,13 @@ public class UserActionService {
     public ActionResultVO likePost(Long postId, Long userId) {
         Post post = requirePublishedPost(postId);
 
+        // 自赞拦截（L-1 修复）：作者给自己点赞是自刷路径 —— 声望层早就豁免了它
+        // （见下方注释），但计数与热度分仍在加。与其"半豁免"，不如在入口直接拒绝
+        // （与"不能举报自己"同一错误码口径）。收藏不走这条：收藏是书签语义，自藏保留。
+        if (post.getAuthorId().equals(userId)) {
+            throw new BusinessException(ErrorCode.PARAM_ERROR, "不能给自己点赞");
+        }
+
         boolean firstTime = insertActionIgnoringDuplicate(
                 userId, UserAction.TARGET_POST, postId, UserAction.ACTION_LIKE);
 
@@ -185,6 +192,11 @@ public class UserActionService {
             throw new BusinessException(ErrorCode.COMMENT_NOT_FOUND);
         }
 
+        // 自赞拦截（L-1 修复）：与帖子点赞同一规则
+        if (comment.getAuthorId().equals(userId)) {
+            throw new BusinessException(ErrorCode.PARAM_ERROR, "不能给自己的评论点赞");
+        }
+
         boolean firstTime = insertActionIgnoringDuplicate(
                 userId, UserAction.TARGET_COMMENT, commentId, UserAction.ACTION_LIKE);
 
@@ -192,9 +204,10 @@ public class UserActionService {
             counterService.addCommentLikeCount(commentId, 1);
             eventPublisher.publishEvent(CountChangedEvent.commentLike(commentId, 1));
             // Sprint 4：通知<b>评论作者</b>（不是帖子作者）。
-            // 目标指向帖子：通知点进去要看到讨论上下文，评论没有独立详情页。
+            // 目标记为"这条评论"（第三轮审计）：与帖子点赞区分开，去重才不会互相吃掉；
+            // 跳转由服务端 JOIN 出评论所属帖子（targetPostId），点进去仍看到完整讨论。
             eventPublisher.publishEvent(
-                    NotificationEvent.likeComment(comment.getAuthorId(), userId, comment.getPostId()));
+                    NotificationEvent.likeComment(comment.getAuthorId(), userId, commentId));
             // 评论被点赞同样是"被认可"：与帖子点赞同一档 +2（不是自己的评论才给分）
             if (!comment.getAuthorId().equals(userId)) {
                 eventPublisher.publishEvent(ReputationEvent.liked(comment.getAuthorId()));

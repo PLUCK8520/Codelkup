@@ -49,6 +49,12 @@ public final class RedisKeys {
     /** JWT 黑名单（登出后失效）：codelkup:auth:blacklist:{jti} */
     public static final String TOKEN_BLACKLIST = PREFIX + "auth:blacklist:";
 
+    /**
+     * 用户级"撤销水位"（L-3 修复）：改密时写入该用户当前的 epoch 秒数，
+     * 过滤器拒绝一切 issuedAt 早于水位的 accessToken —— 补上"jti 黑名单只管单枚"的缺口。
+     */
+    public static final String TOKEN_REVOKE_BEFORE = PREFIX + "auth:revoked_before:";
+
     /** 登录失败计数：codelkup:auth:login_fail:{ip}:{email} */
     public static final String LOGIN_FAIL_COUNT = PREFIX + "auth:login_fail:";
 
@@ -71,6 +77,44 @@ public final class RedisKeys {
      */
     public static final String VIEW_DEDUP = PREFIX + "view:dedup:";
 
+
+    // ===== SSE 实时通道（V0.3 M3-1）=====
+
+    /**
+     * SSE 一次性 ticket：codelkup:sse:ticket:{ticket}
+     *
+     * <p>为什么需要它：浏览器 {@code EventSource} 无法携带 Authorization 头，
+     * 而把 accessToken 直接放进 query 会落进 nginx / 浏览器历史 / 访问日志
+     * （ADR-8）。所以先用登录态换一张 60 秒、只能消费一次的短期票据，
+     * 由 {@code GETDEL} 原子地完成"读取即作废"。
+     */
+    public static final String SSE_TICKET = PREFIX + "sse:ticket:";
+
+    // ===== AI（V0.3 M3-6）=====
+
+    /**
+     * AI 问答缓存：codelkup:ai:cache:{问题指纹}
+     *
+     * <p>只缓存"真正调用过 LLM 的答案"。无 key / 超预算这类降级结果<b>不缓存</b>：
+     * 它们本来就没花钱，缓存只会让"后来配上了 key"的部署在 TTL 内一直拿到旧降级文案。
+     */
+    public static final String AI_ANSWER_CACHE = PREFIX + "ai:cache:";
+
+    /**
+     * 长帖 TL;DR 缓存：codelkup:ai:summary:{postId}:{正文哈希}
+     *
+     * <p>键里带正文哈希而不是"只按 postId"：帖子被编辑后哈希变化，
+     * 缓存自然失效 —— 否则会拿旧摘要去解释新正文（比没有摘要更糟）。
+     */
+    public static final String AI_SUMMARY_CACHE = PREFIX + "ai:summary:";
+
+    /**
+     * 全站日预算计数器：codelkup:ai:budget:{yyyy-MM-dd}
+     *
+     * <p>按自然日切分，过期时间给两天（跨天自然废弃，无需清理任务）。
+     * 这是"成本即攻击面"的第三道闸门（前两道：用户限流、问题指纹缓存）。
+     */
+    public static final String AI_DAILY_BUDGET = PREFIX + "ai:budget:";
 
     // ===== 限流 =====
 

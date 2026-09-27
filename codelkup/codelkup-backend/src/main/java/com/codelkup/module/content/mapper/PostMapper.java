@@ -128,6 +128,17 @@ public interface PostMapper extends BaseMapper<Post> {
     @Select("SELECT id FROM t_post WHERE deleted = 0")
     List<Long> selectAllIds();
 
+    /**
+     * 批量统计"仍可见"的帖子数（第三轮审计 C7 用）。
+     *
+     * <p>可见性口径与检索完全一致（{@code deleted = 0 AND status = 1}）——
+     * AI 答案缓存命中后用它复核引用帖是否还在：缓存里嵌着标题与摘要，
+     * 不复核就会让已删除/下架的帖子借缓存（TTL 6 小时）继续"露面"。
+     */
+    @Select("<script>SELECT COUNT(*) FROM t_post WHERE deleted = 0 AND status = 1 AND id IN " +
+            "<foreach collection='ids' item='id' open='(' separator=',' close=')'>#{id}</foreach></script>")
+    int countVisibleByIds(@Param("ids") List<Long> ids);
+
     // ==================== 提问闭环（V0.3 / M2-14） ====================
 
     /**
@@ -148,6 +159,28 @@ public interface PostMapper extends BaseMapper<Post> {
             WHERE p.deleted = 0 AND p.status = 1 AND p.type = 1 AND p.author_id = #{authorId}
             """)
     Map<String, Object> countQuestionStats(@Param("authorId") Long authorId);
+
+    /**
+     * 全站提问统计：总数 + 已解决 + 待解决（对应 /api/stats）。
+     *
+     * <p>与按作者的 {@link #countQuestionStats(Long)} 同一口径
+     * （{@code deleted = 0 AND status = 1 AND type = 1}，已解决 = accepted_comment_id 非空）。
+     *
+     * <p>为什么一条 SQL 出三列：三个数必须满足 {@code total = solved + unsolved}。
+     * 若由三次查询拼出，跨查询时刻的采纳/发帖会让等式不成立（页面渲染出
+     * 「共 3 个提问 · 待解决 3 · 已解决 10」这类自相矛盾的数字）。
+     *
+     * <p>为什么不用"列表接口 + size=1 探针"：那是 3 次 HTTP 请求、3 个时刻的快照，
+     * 且"总数"会随调用者的筛选条件变化 —— 本查询恒定口径，与筛选无关。
+     */
+    @Select("""
+            SELECT COUNT(*) AS total,
+                   COALESCE(SUM(p.accepted_comment_id IS NOT NULL), 0) AS solved,
+                   COALESCE(SUM(p.accepted_comment_id IS NULL), 0) AS unsolved
+            FROM t_post p
+            WHERE p.deleted = 0 AND p.status = 1 AND p.type = 1
+            """)
+    Map<String, Object> countAllQuestionStats();
 
     // ==================== 热度分（V0.3） ====================
 
@@ -266,6 +299,39 @@ public interface PostMapper extends BaseMapper<Post> {
             @Param("tagId") Long tagId,
             @Param("authorId") Long authorId,
             @Param("orderBy") String orderBy);
+
+    /**
+     * 标题前缀探测（M3-5 相似问题提示用）。
+     *
+     * <h2>为什么需要一条独立的取数路径</h2>
+     * 通用检索的 {@code MATCH(title, content) AGAINST(... IN BOOLEAN MODE)} 是
+     * <b>OR 语义</b>（不带 {@code +} 前缀时，命中任一 token 即可）。遇到
+     * {@code java} 这类常见词会把候选池整个打满 —— 实测（2026-09-26）：
+     * 查 {@code java virtual thread} 时，一篇标题就叫这个的<b>新帖没能进前 20</b>，
+     * 于是一堆无关帖子占满了提示位。"标题最像"是提示场景里最有价值的一类信号，
+     * 必须有独立路径保证它进得来，而不是寄希望于相关性排序把它排进候选池。
+     *
+     * <p>{@code ESCAPE '!'} 与检索同一口径：转义由调用方（SearchService）
+     * 统一处理，这里不重复实现一套 LIKE 转义规则。
+     *
+     * <p>只取提示要用到的几列（id / title / summary / board），
+     * 不 SELECT 正文 —— 前缀命中的预览直接用 summary，不需要正文参与。
+     *
+     * @param escapedPrefix 已转义的前缀（非空，由 Service 保证）
+     */
+    @Select("""
+            SELECT p.id, p.title, p.summary, p.author_id, p.board_id,
+                   b.name AS board_name, b.slug AS board_slug
+            FROM t_post p
+            LEFT JOIN t_board b ON b.id = p.board_id
+            WHERE p.deleted = 0 AND p.status = 1
+              AND p.title LIKE CONCAT(#{escapedPrefix}, '%') ESCAPE '!'
+            ORDER BY p.create_time DESC
+            LIMIT #{limit}
+            """)
+    List<com.codelkup.module.content.vo.PostSearchRowVO> selectByTitlePrefix(
+            @Param("escapedPrefix") String escapedPrefix,
+            @Param("limit") int limit);
 
     // ==================== 关注流（Sprint 4） ====================
 

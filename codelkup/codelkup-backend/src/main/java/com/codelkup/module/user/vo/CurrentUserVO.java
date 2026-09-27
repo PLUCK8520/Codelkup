@@ -6,10 +6,11 @@ import lombok.Data;
 import java.time.LocalDateTime;
 
 /**
- * 本人资料视图 —— 比 {@link UserVO} 多出邮箱字段。
+ * 本人资料视图 —— 独立于公开的 {@link UserVO}：多出邮箱与 role。
  *
- * <p>仅用于"查看/编辑自己的资料"场景。公开主页接口用 {@link UserVO}，
- * 不暴露邮箱。这个拆分是为了避免"一个 VO 走天下"导致邮箱被意外公开。
+ * <p>这两类字段都只在"本人"场景返回：{@code role} 用于前端管理入口（L-2 修复：
+ * 公开主页不再暴露角色，避免管理员被遍历枚举）；{@code email} 属于隐私。
+ * "一个 VO 走天下"正是这两类泄露的共同来源，所以保持两个独立类型。
  *
  * @author 刘
  */

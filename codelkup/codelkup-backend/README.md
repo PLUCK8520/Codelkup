@@ -71,6 +71,11 @@ curl --noproxy '*' http://127.0.0.1:8085/api/system/health
 | `/swagger-ui/index.html` | 接口文档（Swagger UI） |
 | `/v3/api-docs` | OpenAPI JSON |
 | `/actuator/health` | Actuator 健康检查 |
+| `/actuator/prometheus` | 指标（M3-10）。⚠️ **只对回环 + RFC1918 来源开放**（`SecurityConfig`），公网经 nginx 一律 404；自定义指标与打点口径见 DEV-DOC §10.7 |
+
+> 💡 指标验收脚本：`python verify-v03-metrics.py`（附着型，需后端已在跑）——
+> 除了断言端点与四组自定义指标，还会用 `X-Forwarded-For` 冒充公网/容器两种来源验闸门。
+> 想跑得快就用 `python serve-backend.py --codelkup.score.initial-delay-ms=2000 --codelkup.sse.heartbeat-ms=2000` 启动后端。
 
 > 💡 **Windows 提示**：若系统配置了代理，curl 访问 localhost 会被代理劫持返回 502。
 > 加 `--noproxy '*'` 绕过。

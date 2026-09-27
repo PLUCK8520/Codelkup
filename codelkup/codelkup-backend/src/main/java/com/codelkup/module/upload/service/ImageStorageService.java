@@ -159,6 +159,14 @@ public class ImageStorageService {
             return false;
         }
         String relative = url.substring(urlPrefix.length() + 1);
+        if (relative.isBlank()) {
+            // ⚠️ 第三轮审计 C6：url 恰好等于前缀本身（如 "/uploads/"）时，
+            //    relative 为空、解析结果就是**存储根目录** —— 下面的 startsWith 检查拦不住它，
+            //    deleteIfExists 会试图删掉整个根。正常调用（服务端自生成的路径）不会走到这里，
+            //    这道闸是防御"未来某个调用方传了脏 URL"。
+            log.warn("拒绝删除：URL 未指向具体文件 | url={}", url);
+            return false;
+        }
         Path target = rootPath.resolve(relative).normalize();
         if (!target.startsWith(rootPath)) {
             log.warn("拒绝删除存储根目录之外的文件 | url={} | resolved={}", url, target);

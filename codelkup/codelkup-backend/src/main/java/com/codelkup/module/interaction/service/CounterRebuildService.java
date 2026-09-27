@@ -5,6 +5,8 @@ import com.codelkup.module.interaction.entity.UserAction;
 import com.codelkup.module.interaction.mapper.CommentMapper;
 import com.codelkup.module.interaction.mapper.UserActionMapper;
 import com.codelkup.module.interaction.vo.RebuildReportVO;
+import io.micrometer.core.instrument.MeterRegistry;
+import jakarta.annotation.PostConstruct;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
@@ -12,6 +14,7 @@ import org.springframework.stereotype.Service;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.atomic.AtomicInteger;
 
 /**
  * 计数重建服务 —— <b>本 Sprint 最值得在面试里讲的一块</b>。
@@ -53,6 +56,12 @@ public class CounterRebuildService {
     private final PostMapper postMapper;
     private final CounterService counterService;
 
+    /** 指标注册表（M3-10） */
+    private final MeterRegistry meterRegistry;
+
+    /** 最近一次重建的偏差总数；-1 = 还没重建过（区分"没跑过"与"跑过且无漂移"） */
+    private final AtomicInteger lastDrift = new AtomicInteger(-1);
+
     /**
      * 重建<b>单篇</b>帖子的全部计数（点赞 / 收藏 / 评论）。
      *
@@ -60,7 +69,14 @@ public class CounterRebuildService {
      *
      * <p>注意写入顺序：<b>先 MySQL 后 Redis</b>。因为 Redis 是"实时增量"的承接方，
      * 一旦它被校准，后续的 {@code INCR} 就会从这个正确的基线往上加。
-     * 反过来若先写 Redis，中间窗口内到达的增量会加在旧值上，又产生偏差。
+     *
+     * <p>⚠️ <b>顺序只是"更不容易错"，不是"不会错"</b>（第三轮审计修正了此处原先的表述）：
+     * 重建窗口内若恰有一次点赞，其 Redis {@code INCR} 发生在业务事务里、MySQL {@code +1}
+     * 却要等 {@code AFTER_COMMIT} 才落 —— 于是"COUNT → UPDATE(MySQL) → SET(Redis)"
+     * 这条链可能把那次增量抹掉（Redis 比 MySQL 低 1）。真正兜住它的是：
+     * <b>每次重建都会把偏差写进 {@code driftCount} 指标</b>，且重建本身就幂等 ——
+     * 再跑一次即自愈。重建是管理员动作、不是热路径，为这个极小窗口给点赞加锁/加标记
+     * 是拿复杂度换一个"下次重建反正也会修"的位，不划算。
      *
      * @return 重建报告（含新旧值对照，便于人工核对与压测取证）
      */
@@ -103,6 +119,7 @@ public class CounterRebuildService {
                 drift(post.getLikeCount(), trueLike)
                         + drift(post.getCollectCount(), trueCollect)
                         + drift(post.getCommentCount(), trueComment));
+        lastDrift.set(report.getDriftCount());
 
         log.info("计数重建完成 | postId={} | like {}→{} | collect {}→{} | comment {}→{}",
                 postId, post.getLikeCount(), trueLike,
@@ -169,9 +186,24 @@ public class CounterRebuildService {
         report.setSuccess(true);
         report.setFixedPosts(fixed);
         report.setDriftCount(totalDrift);
+        lastDrift.set(totalDrift);
         log.info("全量计数重建完成 | 帖子数={} | 修正={} | 偏差总数={}",
                 postIds.size(), fixed, totalDrift);
         return report;
+    }
+
+    /**
+     * 注册指标（M3-10）：最近一次重建的偏差总数。
+     *
+     * <p>为什么值得做成指标：`driftCount` 本来只有"重建接口的返回值"这一个出口 ——
+     * 想看"有没有在漂"必须有人主动去调接口。做成 Gauge 后，Prometheus 每 15 秒拉一次，
+     * 偏差长期非 0 就能直接告警（漂移是"最终一致"方案的必然伴生现象，必须可观测）。
+     *
+     * <p>⚠️ 与热度分那处同理：Gauge 持有 Number 实例的弱引用，必须字段持有 + 只注册一次。
+     */
+    @PostConstruct
+    void registerMetrics() {
+        meterRegistry.gauge("codelkup.counter.last_drift", lastDrift);
     }
 
     /** 把 {@code [{targetId, cnt}]} 转成 Map，缺失的按 0 处理 */

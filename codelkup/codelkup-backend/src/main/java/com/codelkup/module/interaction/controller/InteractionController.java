@@ -52,6 +52,31 @@ public class InteractionController {
     @Value("${codelkup.rate-limit.comment-per-hour:60}")
     private int commentPerHour;
 
+    /** 点赞/取消（帖子）：默认 300 次/小时/用户（L-4 补齐） */
+    @Value("${codelkup.rate-limit.like-per-hour:300}")
+    private int likePerHour;
+
+    /** 收藏/取消：默认 300 次/小时/用户（L-4 补齐） */
+    @Value("${codelkup.rate-limit.collect-per-hour:300}")
+    private int collectPerHour;
+
+    /** 评论点赞/取消：默认 300 次/小时/用户（L-4 补齐，与帖子点赞分开计数） */
+    @Value("${codelkup.rate-limit.comment-like-per-hour:300}")
+    private int commentLikePerHour;
+
+    /**
+     * 互动类限流的统一口径（L-4）。
+     *
+     * <p>点赞/收藏是幂等的轻操作，但循环 like↔unlike 会持续打计数与事件链 ——
+     * 用一个宽松额度（300/小时）挡住脚本级循环，同时不打扰真实浏览（≈5 次/分钟）。
+     * 帖子与评论分开计数：两者是不同对象上的独立行为，不该互相挤占额度。
+     */
+    private void requireInteractionQuota(String bucket, int limitPerHour, Long userId) {
+        if (!rateLimitService.tryAcquire(bucket, "u:" + userId, limitPerHour, 60)) {
+            throw new BusinessException(ErrorCode.TOO_MANY_REQUESTS);
+        }
+    }
+
     // ==================== 评论 ====================
 
     @Operation(summary = "评论列表", description = "树形返回（只做两级）；计数取 Redis 实时值")
@@ -93,10 +118,11 @@ public class InteractionController {
 
     // ==================== 帖子点赞 / 收藏 ====================
 
-    @Operation(summary = "点赞帖子", description = "幂等：重复点赞返回成功态且计数不变")
+    @Operation(summary = "点赞帖子", description = "幂等：重复点赞返回成功态且计数不变。按用户限流（默认 300 次/小时）")
     @PostMapping("/posts/{id}/like")
     public Result<ActionResultVO> likePost(@PathVariable Long id,
                                            @CurrentUser(required = true) Long userId) {
+        requireInteractionQuota("like", likePerHour, userId);
         return Result.success(userActionService.likePost(id, userId));
     }
 
@@ -104,13 +130,15 @@ public class InteractionController {
     @DeleteMapping("/posts/{id}/like")
     public Result<ActionResultVO> unlikePost(@PathVariable Long id,
                                              @CurrentUser(required = true) Long userId) {
+        requireInteractionQuota("like", likePerHour, userId);
         return Result.success(userActionService.unlikePost(id, userId));
     }
 
-    @Operation(summary = "收藏帖子", description = "幂等：重复收藏返回成功态且计数不变")
+    @Operation(summary = "收藏帖子", description = "幂等：重复收藏返回成功态且计数不变。按用户限流（默认 300 次/小时）")
     @PostMapping("/posts/{id}/collect")
     public Result<ActionResultVO> collectPost(@PathVariable Long id,
                                               @CurrentUser(required = true) Long userId) {
+        requireInteractionQuota("collect", collectPerHour, userId);
         return Result.success(userActionService.collectPost(id, userId));
     }
 
@@ -118,15 +146,17 @@ public class InteractionController {
     @DeleteMapping("/posts/{id}/collect")
     public Result<ActionResultVO> uncollectPost(@PathVariable Long id,
                                                 @CurrentUser(required = true) Long userId) {
+        requireInteractionQuota("collect", collectPerHour, userId);
         return Result.success(userActionService.uncollectPost(id, userId));
     }
 
     // ==================== 评论点赞 ====================
 
-    @Operation(summary = "点赞评论", description = "幂等")
+    @Operation(summary = "点赞评论", description = "幂等。按用户限流（默认 300 次/小时）")
     @PostMapping("/comments/{commentId}/like")
     public Result<ActionResultVO> likeComment(@PathVariable Long commentId,
                                               @CurrentUser(required = true) Long userId) {
+        requireInteractionQuota("comment_like", commentLikePerHour, userId);
         return Result.success(userActionService.likeComment(commentId, userId));
     }
 
@@ -134,6 +164,7 @@ public class InteractionController {
     @DeleteMapping("/comments/{commentId}/like")
     public Result<ActionResultVO> unlikeComment(@PathVariable Long commentId,
                                                 @CurrentUser(required = true) Long userId) {
+        requireInteractionQuota("comment_like", commentLikePerHour, userId);
         return Result.success(userActionService.unlikeComment(commentId, userId));
     }
 

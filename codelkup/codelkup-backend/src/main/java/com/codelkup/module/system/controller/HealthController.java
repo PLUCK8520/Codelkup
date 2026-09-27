@@ -4,6 +4,7 @@ import com.codelkup.common.result.Result;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import lombok.RequiredArgsConstructor;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.data.redis.core.RedisTemplate;
 import org.springframework.web.bind.annotation.GetMapping;
@@ -30,6 +31,16 @@ public class HealthController {
 
     private final JdbcTemplate jdbcTemplate;
     private final RedisTemplate<String, Object> redisTemplate;
+
+    /** 注册开关（公开只读）：前端注册页据此提前显示"暂未开放"，而不是让访客填完表单才被拒 */
+    @Value("${codelkup.auth.registration-enabled:true}")
+    private boolean registrationEnabled = true;
+
+    @Operation(summary = "公开站点配置", description = "游客可读；目前只有注册开关（前端注册页展示用）")
+    @GetMapping("/config")
+    public Result<Map<String, Object>> config() {
+        return Result.success(Map.of("registrationEnabled", registrationEnabled));
+    }
 
     @Operation(summary = "骨架自检", description = "依次探测 MySQL、Redis 连通性")
     @GetMapping("/health")

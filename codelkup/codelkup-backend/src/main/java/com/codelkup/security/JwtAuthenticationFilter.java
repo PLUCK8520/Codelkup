@@ -55,7 +55,17 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
                     && !tokenStore.isBlacklisted(claims.getId())) {
 
                 Long userId = jwtTokenProvider.getUserId(claims);
-                if (userId != null) {
+
+                // L-3：用户级撤销水位（改密时写入）—— issuedAt 早于水位的一律拒绝。
+                // 与 jti 黑名单互补：黑名单管"单枚"（登出），水位管"一整代"（改密后的他设备会话）。
+                Long revokedBefore = userId == null ? null : tokenStore.revokedBefore(userId);
+                boolean revoked = revokedBefore != null
+                        && claims.getIssuedAt() != null
+                        && claims.getIssuedAt().getTime() / 1000 < revokedBefore;
+
+                if (revoked) {
+                    log.debug("token 已被用户级撤销（改密）| userId={}", userId);
+                } else if (userId != null) {
                     try {
                         User user = userLoader.loadById(userId);
 

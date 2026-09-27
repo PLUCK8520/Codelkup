@@ -151,7 +151,16 @@ public class CounterService {
             }
             // 未命中：从 MySQL 基线回填
             int baseline = baselineOf(dimension, postId);
-            redis.opsForValue().set(key, String.valueOf(baseline));
+            // ⚠️ 必须 SETNX（第三轮审计 C1）：与"首次点赞"的 Lua（不存在则 SET 基线再 INCR）
+            //    并发时，普通 SET 会把刚 INCR 的结果覆盖回旧基线 → Redis 比 MySQL 少 1，
+            //    且要等到下次重建才自愈。SETNX 失败说明 key 已被并发方初始化：改读它的现值返回。
+            Boolean initialized = redis.opsForValue().setIfAbsent(key, String.valueOf(baseline));
+            if (Boolean.FALSE.equals(initialized)) {
+                String concurrent = redis.opsForValue().get(key);
+                if (concurrent != null) {
+                    return Integer.parseInt(concurrent);
+                }
+            }
             return baseline;
         } catch (Exception e) {
             log.warn("读 Redis 计数失败，回落 MySQL | key={} | err={}", key, e.getMessage());
@@ -196,7 +205,14 @@ public class CounterService {
             var comment = commentMapper.selectById(commentId);
             int baseline = comment == null || comment.getLikeCount() == null
                     ? 0 : comment.getLikeCount();
-            redis.opsForValue().set(key, String.valueOf(baseline));
+            // 同 getPostCount：SETNX 回填，避免覆盖并发 INCR 的结果（第三轮审计 C1）
+            Boolean initialized = redis.opsForValue().setIfAbsent(key, String.valueOf(baseline));
+            if (Boolean.FALSE.equals(initialized)) {
+                String concurrent = redis.opsForValue().get(key);
+                if (concurrent != null) {
+                    return Integer.parseInt(concurrent);
+                }
+            }
             return baseline;
         } catch (Exception e) {
             log.warn("读评论点赞数失败，回落 MySQL | commentId={} | err={}", commentId, e.getMessage());

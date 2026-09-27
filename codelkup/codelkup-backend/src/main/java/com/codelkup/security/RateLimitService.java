@@ -4,9 +4,10 @@ import com.codelkup.common.constant.RedisKeys;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.data.redis.core.StringRedisTemplate;
+import org.springframework.data.redis.core.script.DefaultRedisScript;
 import org.springframework.stereotype.Service;
 
-import java.util.concurrent.TimeUnit;
+import java.util.List;
 
 /**
  * 计数器式限流（固定窗口）。
@@ -17,9 +18,10 @@ import java.util.concurrent.TimeUnit;
  *
  * <h2>为什么是固定窗口而不是滑动窗口 / 令牌桶</h2>
  * 这里的目标只是把批量枚举的成本抬到不可行（几十次/十分钟量级足以做到），
- * 不需要精确控制突发流量。固定窗口只要 {@code INCR + EXPIRE} 两条命令，
- * 无第三方依赖、行为一眼可读懂；滑动窗口要多一个 ZSet 或 Lua，
- * 对本项目是纯粹的复杂度负担。
+ * 不需要精确控制突发流量。固定窗口只需一次自增计数；为让"计数 + 过期"不可分割、
+ * 并**自愈异常残留的无 TTL 键**（F3，第二轮审计：INCR 与 EXPIRE 分离时，
+ * 首请求的 EXPIRE 失败会让该桶永久 42901），用一小段 Lua 原子完成 ——
+ * 仍是固定窗口，不是滑动窗口，没有引入 ZSet 的复杂度。
  *
  * <h2>降级策略</h2>
  * Redis 不可用时<b>放行</b>而不是拒绝：限流是保护措施，不该在依赖故障时
@@ -35,6 +37,17 @@ public class RateLimitService {
     private final StringRedisTemplate stringRedisTemplate;
 
     /**
+     * 原子"计数 + 过期"（F3）：INCR 与 EXPIRE 必须一次完成；
+     * TTL&lt;0 时补设 —— 既覆盖首请求，也**自愈**历史异常残留的无 TTL 键
+     * （BRPOP/连接中断等都可能在 INCR 成功后丢掉 EXPIRE）。
+     */
+    private static final DefaultRedisScript<Long> ACQUIRE_SCRIPT = new DefaultRedisScript<>(
+            "local c = redis.call('INCR', KEYS[1]) "
+                    + "if redis.call('TTL', KEYS[1]) < 0 then redis.call('EXPIRE', KEYS[1], ARGV[1]) end "
+                    + "return c",
+            Long.class);
+
+    /**
      * 尝试获取一次配额。
      *
      * @param bucket        业务桶名（如 {@code check_email}），用于隔离不同接口的计数
@@ -46,13 +59,10 @@ public class RateLimitService {
     public boolean tryAcquire(String bucket, String identity, int max, int windowMinutes) {
         String key = RedisKeys.RATE_LIMIT + bucket + ":" + identity;
         try {
-            Long count = stringRedisTemplate.opsForValue().increment(key);
+            Long count = stringRedisTemplate.execute(
+                    ACQUIRE_SCRIPT, List.of(key), String.valueOf(windowMinutes * 60L));
             if (count == null) {
                 return true;
-            }
-            // 只在首次计数时设置过期，避免每次请求都续期导致"窗口永不过期"
-            if (count == 1L) {
-                stringRedisTemplate.expire(key, windowMinutes, TimeUnit.MINUTES);
             }
             return count <= max;
         } catch (Exception e) {

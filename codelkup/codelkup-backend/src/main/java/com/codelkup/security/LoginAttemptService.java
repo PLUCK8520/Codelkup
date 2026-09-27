@@ -113,6 +113,47 @@ public class LoginAttemptService {
         stringRedisTemplate.delete(key(ip, email));
     }
 
+    /* ==================== 改密失败锁定（M-1 修复：userId 维度） ==================== */
+
+    /**
+     * 改密失败计数的 key：沿用登录失败的前缀、换成 userId 维度。
+     *
+     * <p>为什么是 userId：改密接口要求**先持有该账号的有效凭证**，
+     * 攻击面是"拿到凭证后爆破原密码"—— 绑定 userId 最精确；也天然不会像
+     * "按邮箱锁定"那样被利用来 DoS 他人（能触发锁定的只有该账号的持有者）。
+     * 放在 {@code codelkup:auth:} 命名空间下：清限流桶的工具只清 {@code rate:*}，
+     * 不会误删它 —— 与登录锁定同一待遇。
+     */
+    private String pwdChangeKey(Long userId) {
+        return RedisKeys.LOGIN_FAIL_COUNT + "pwd:" + userId;
+    }
+
+    /**
+     * 改密前检查是否已锁定（阈值与登录一致：{@link #MAX_ATTEMPTS} 次 / {@link #LOCK_MINUTES} 分钟）。
+     *
+     * <p>锁定期间**即使原密码正确也不放行**（检查先于比对）—— 这正是"锁定"的含义，
+     * 与 login 的顺序一致。
+     *
+     * @throws BusinessException {@link ErrorCode#LOGIN_ATTEMPT_EXCEEDED}
+     */
+    public void checkPasswordChangeNotLocked(Long userId) {
+        String count = stringRedisTemplate.opsForValue().get(pwdChangeKey(userId));
+        if (count != null && Integer.parseInt(count) >= MAX_ATTEMPTS) {
+            throw new BusinessException(ErrorCode.LOGIN_ATTEMPT_EXCEEDED,
+                    "原密码错误次数过多，请 " + LOCK_MINUTES + " 分钟后再试");
+        }
+    }
+
+    /** 改密"原密码不正确"时累加（只有凭证比对失败才计数 —— 与登录同一口径） */
+    public void recordPasswordChangeFailure(Long userId) {
+        increment(pwdChangeKey(userId), LOCK_MINUTES);
+    }
+
+    /** 改密成功时清除计数（"成功一次即清零"，与登录一致） */
+    public void clearPasswordChangeFailure(Long userId) {
+        stringRedisTemplate.delete(pwdChangeKey(userId));
+    }
+
     /** INCR 并在首次计数时设置过期（每次都续期会导致"永远锁定"） */
     private void increment(String key, int windowMinutes) {
         Long count = stringRedisTemplate.opsForValue().increment(key);

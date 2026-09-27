@@ -39,6 +39,9 @@ public class NotificationVO {
     @Schema(description = "目标ID")
     private Long targetId;
 
+    @Schema(description = "目标为评论时（targetType=2）该评论所属的帖子ID；由服务端解析，供前端跳转")
+    private Long targetPostId;
+
     @Schema(description = "快照文案（纯文本，前端负责渲染与转义）")
     private String content;
 

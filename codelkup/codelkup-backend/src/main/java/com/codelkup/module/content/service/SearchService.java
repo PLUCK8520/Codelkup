@@ -144,6 +144,29 @@ public class SearchService {
         return PageResult.of(result.getCurrent(), result.getSize(), result.getTotal(), records);
     }
 
+    // ==================== 标题前缀探测（M3-5 相似问题提示） ====================
+
+    /**
+     * 取"标题以给定前缀开头"的帖子（最多 {@code limit} 条）。
+     *
+     * <p>与 {@link #search} 并列的第二条取数路径，只给相似问题提示用：
+     * 通用检索是 OR 语义，常见词会打满候选池、把"标题几乎一样"的帖子挤出去
+     * （详见 {@code PostMapper.selectByTitlePrefix} 的说明）。
+     *
+     * <p>清洗与转义都复用它自己那两条规则（{@link #sanitize} / {@link #escapeLike}）——
+     * 保证"前缀探测"与"关键词检索"面对同一份用户输入时，看到的是同一串字。
+     *
+     * <p>⚠️ 前缀会被清洗阶段截断到 {@value #MAX_QUERY_LENGTH} 字：
+     * 提示的输入是标题草稿（上限 120），但 50 字的前缀已足够精确。
+     */
+    public List<PostSearchRowVO> byTitlePrefix(String rawPrefix, int limit) {
+        String prefix = sanitize(rawPrefix);
+        if (prefix.isEmpty()) {
+            return List.of();
+        }
+        return postMapper.selectByTitlePrefix(escapeLike(prefix), limit);
+    }
+
     // ==================== 输入清洗 ====================
 
     /**

@@ -59,6 +59,10 @@ public class ContentController {
     @Value("${codelkup.rate-limit.post-per-hour:20}")
     private int postPerHour;
 
+    /** 编辑帖子限流（L-4 补齐）：默认 30 次/小时/用户 */
+    @Value("${codelkup.rate-limit.post-edit-per-hour:30}")
+    private int postEditPerHour;
+
     // ==================== 板块 ====================
 
     @Operation(summary = "板块列表", description = "返回全部正常板块，按 sortOrder 升序")
@@ -141,11 +145,15 @@ public class ContentController {
         return Result.success(postService.create(body, userId));
     }
 
-    @Operation(summary = "编辑帖子", description = "字段可选，只更新传入项；仅作者本人或管理员")
+    @Operation(summary = "编辑帖子", description = "字段可选，只更新传入项；仅作者本人或管理员。按用户限流（默认 30 次/小时）")
     @PutMapping("/posts/{id}")
     public Result<PostDetailVO> updatePost(@PathVariable Long id,
                                            @Valid @RequestBody PostUpdateRequest body,
                                            @CurrentUser(required = true) User currentUser) {
+        // L-4 补齐：防高频改写（改标题/正文会连锁影响检索索引与摘要）
+        if (!rateLimitService.tryAcquire("post_edit", "u:" + currentUser.getId(), postEditPerHour, 60)) {
+            throw new BusinessException(ErrorCode.TOO_MANY_REQUESTS);
+        }
         boolean isAdmin = isAdmin(currentUser);
         return Result.success(postService.update(id, body, currentUser.getId(), isAdmin));
     }

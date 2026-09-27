@@ -33,8 +33,10 @@ public class UserVO {
     @Schema(description = "技术标签")
     private String techTags;
 
-    @Schema(description = "角色：0普通 1版主 2管理员")
-    private Integer role;
+    // ⚠️ 此处不得添加 role 字段（L-2 修复，安全审计）：角色属于"谁能操作"的信息，
+    //    只在本人接口的 CurrentUserVO 里返回。公开主页若带上 role=2，遍历 id 就能
+    //    枚举出全部管理员账号，为撞库 / 社工提供靶子 —— 与下方 email 同一类
+    //    的"类型层防泄露"（不是记得 setRole(null)，而是压根没有这个字段）。
 
     @Schema(description = "声望值")
     private Integer reputation;
@@ -50,9 +52,8 @@ public class UserVO {
 
     // ==================== 提问统计（只读，V0.3 / M2-14） ====================
     //
-    // 只出现在公开主页（GET /api/users/{id}）。CurrentUserVO 继承本类但不会填这几个
-    // 字段（它服务的是顶栏身份展示，不需要这些数字），因此"查看自己"时它们为 null ——
-    // 前端对 null 显示「—」，而不是 0，避免把"没数据"和"真的是 0"混为一谈。
+    // 只出现在公开主页（GET /api/users/{id}）—— 个人主页（含自己）都走这个接口；
+    // 顶栏身份展示走独立的 CurrentUserVO，不含这组统计。
 
     @Schema(description = "提问数（已发布的提问帖）")
     private Integer askedCount;

@@ -44,6 +44,7 @@ public enum ErrorCode {
     FORBIDDEN(40301, "无权限执行此操作"),
     NOT_RESOURCE_OWNER(40302, "只能操作自己的内容"),
     ROLE_NOT_ENOUGH(40303, "权限不足"),
+    REGISTRATION_CLOSED(40304, "注册暂未开放"),
 
     // ===== 404xx 资源不存在 =====
     USER_NOT_FOUND(40401, "用户不存在"),
@@ -52,6 +53,7 @@ public enum ErrorCode {
     BOARD_NOT_FOUND(40404, "板块不存在"),
     TAG_NOT_FOUND(40405, "标签不存在"),
     NOTIFICATION_NOT_FOUND(40406, "通知不存在"),
+    REPORT_NOT_FOUND(40407, "举报记录不存在"),
 
     // ===== 409xx 冲突 =====
     EMAIL_ALREADY_EXISTS(40901, "该邮箱已被注册"),
@@ -62,6 +64,8 @@ public enum ErrorCode {
     ALREADY_FOLLOWING(40906, "已经关注了"),
     NOT_FOLLOWING(40907, "尚未关注"),
     CANNOT_FOLLOW_SELF(40908, "不能关注自己"),
+    ALREADY_REPORTED(40909, "已经举报过了"),
+    REPORT_ALREADY_HANDLED(40910, "该举报已处理过了"),
 
     // ===== 429xx 限流 =====
     TOO_MANY_REQUESTS(42901, "操作过于频繁，请稍后再试"),

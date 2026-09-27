@@ -35,4 +35,14 @@ public interface TagMapper extends BaseMapper<Tag> {
     /** 引用次数 +delta，同 BoardMapper.addPostCount 的原子性考量 */
     @Update("UPDATE t_tag SET use_count = GREATEST(use_count + #{delta}, 0) WHERE id = #{tagId}")
     int addUseCount(@Param("tagId") Long tagId, @Param("delta") int delta);
+
+    /**
+     * 标签总数（对应 /api/stats）。
+     *
+     * <p>与 {@link #selectHot(int)} 区分：热门榜有 LIMIT，长度不是全量；
+     * 页面要显示"共 X 个标签"时用本方法，否则上限一旦调小，
+     * 数字会跟着"变少"（把"只展示了 50 个"说成"一共就 50 个"）。
+     */
+    @Select("SELECT COUNT(*) FROM t_tag")
+    int countAll();
 }

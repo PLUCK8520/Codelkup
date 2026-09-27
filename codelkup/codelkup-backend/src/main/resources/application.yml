@@ -128,13 +128,25 @@ management:
   endpoints:
     web:
       exposure:
-        include: health,info
+        # prometheus（M3-10）：只应被**容器网络内**的抓取方访问 ——
+        # compose 不映射后端端口，nginx 另有 `location /actuator/ { return 404; }`
+        # 显式挡在公网之外。不要靠"没人知道这个路径"来保护指标。
+        include: health,info,prometheus
   endpoint:
     health:
       show-details: when-authorized
+  metrics:
+    # 所有指标统一带上应用名，便于多服务共用一个 Prometheus 时区分
+    tags:
+      application: codelkup
 
 # ========== 业务自定义配置 ==========
 codelkup:
+  # 注册开关（PRE-MORTEM T0-2）：演示/生产站建议 false，防止公网被扫到后灌垃圾注册。
+  # 关闭时 POST /api/auth/register 一律 40304；前端注册页经 /api/system/config 提前显示"暂未开放"。
+  # 登录 / 演示账号 / 其它功能完全不受影响。默认 true 以保证本地开发与验收脚本可用。
+  auth:
+    registration-enabled: ${REGISTRATION_ENABLED:true}
   jwt:
     # 生产环境必须通过环境变量覆盖；dev 环境在 application-dev.yml 中提供默认值
     secret: ${JWT_SECRET}
@@ -163,6 +175,88 @@ codelkup:
     post-per-hour: ${RATE_LIMIT_POST_PER_HOUR:20}
     # 评论：60 条/小时/用户
     comment-per-hour: ${RATE_LIMIT_COMMENT_PER_HOUR:60}
+    # 举报：20 次/小时/用户（正常用户一小时遇不到 20 条该举报的内容；
+    # 给到 20 是为了不误伤"翻旧帖时连续举报"的场景，同时把批量举报的成本压住）
+    report-per-hour: ${RATE_LIMIT_REPORT_PER_HOUR:20}
+    # 草稿自动保存：240 次/小时/用户（前端 15 秒节流 ≈ 每分钟最多 4 次，留了约 1/3 余量；
+    # 超限时前端静默降级为只写本地草稿，不会打断编辑）
+    draft-per-hour: ${RATE_LIMIT_DRAFT_PER_HOUR:240}
+    # SSE ticket 签发：120 次/小时/用户（正常一次连接换一张；前端重连也远低于此）
+    sse-ticket-per-hour: ${RATE_LIMIT_SSE_TICKET_PER_HOUR:120}
+    # 相似问题提示：300 次/小时/用户（编辑器里边写边问，去抖后一次会话约 20~50 次；
+    # 不调 LLM，只是检索 + 重排，所以额度给得比 AI 问答宽）
+    similar-per-hour: ${RATE_LIMIT_SIMILAR_PER_HOUR:300}
+    # RAG 问答 + 长帖 TL;DR：10 次/小时/用户（ALIGNMENT 口径）。
+    # ⚠️ 两者**共用这一个桶**：都真花钱，分开计等于把每人的额度翻倍 ——
+    #    "AI 生成类调用按用户 10/小时"才是成本闸门的原意。
+    ai-per-hour: ${RATE_LIMIT_AI_PER_HOUR:10}
+    # ---------- 以下六项为 L-4 安全加固补齐（此前这些写接口没有桶） ----------
+    # 点赞 / 取消（帖子）：300 次/小时/用户。循环 like↔unlike 的成本在计数与事件上，
+    # 300（≈5 次/分钟）对真实浏览绰绰有余，对脚本循环是硬约束。
+    like-per-hour: ${RATE_LIMIT_LIKE_PER_HOUR:300}
+    # 收藏 / 取消：同一口径
+    collect-per-hour: ${RATE_LIMIT_COLLECT_PER_HOUR:300}
+    # 评论点赞 / 取消：同一口径（与帖子点赞分开计数，互不挤占）
+    comment-like-per-hour: ${RATE_LIMIT_COMMENT_LIKE_PER_HOUR:300}
+    # 关注 / 取关：60 次/小时/用户 —— 每次关注都会给对方发通知（同源去重只挡未读合并），
+    # 循环关注/取关是通知骚扰的放大器
+    follow-per-hour: ${RATE_LIMIT_FOLLOW_PER_HOUR:60}
+    # 刷新凭证：120 次/小时/IP（未认证接口按 IP；access 30 分钟一换 ≈ 每设备 2 次/小时）
+    refresh-per-hour: ${RATE_LIMIT_REFRESH_PER_HOUR:120}
+    # 修改资料：30 次/小时/用户（昵称/简介是公开展示面，防高频篡改）
+    profile-per-hour: ${RATE_LIMIT_PROFILE_PER_HOUR:30}
+    # 编辑帖子：30 次/小时/用户（防高频改写；正常编辑远低于此）
+    post-edit-per-hour: ${RATE_LIMIT_POST_EDIT_PER_HOUR:30}
+  # ========== SSE 实时通道（V0.3 M3-1）==========
+  # 通知单向推送用 SSE（ADR-3）：无需协议升级，Spring MVC 原生支持。
+  # 鉴权用一次性 ticket（ADR-8）：EventSource 不能带 Header，token 也不能进 URL。
+  sse:
+    # ticket 有效期（秒）：签约后必须在此窗口内完成连接，消费即作废（GETDEL）
+    ticket-ttl-seconds: ${SSE_TICKET_TTL_SECONDS:60}
+    # 心跳间隔（毫秒）：发注释帧（:ping），只维持连接、不触发前端事件。
+    # ⚠️ 必须小于反向代理的 read timeout，否则连接会被代理先掐断（nginx 侧见 M3-2）
+    heartbeat-ms: ${SSE_HEARTBEAT_MS:25000}
+    # 服务端连接超时（毫秒）：到点自动关闭，让前端重连 —— 防半开连接长期占资源。
+    # 默认 30 分钟；前端在收到关闭后会重新换 ticket 再连
+    timeout-ms: ${SSE_TIMEOUT_MS:1800000}
+    # 单用户最大并发连接数（多标签）：超出时关掉其中一个旧连接，保证新连接可用
+    max-connections-per-user: ${SSE_MAX_CONNECTIONS_PER_USER:5}
+  # ========== AI 客户端（V0.3 M3-4 / M3-11 / ADR-1）==========
+  # 走 OpenAI 兼容端点（默认 DeepSeek），两个**可切换**实现（键见下面的 impl）：
+  #   rest（默认） = Spring 6.1 的 RestClient 手写版，零框架依赖
+  #   spring-ai    = Spring AI 的 OpenAiChatModel 版（+6 个 jar / 0.8MB，见 pom 的说明）
+  # ⚠️ 没有 key = "AI 未启用"这个**正常状态**：available() 返回 false、
+  #    chat() 直接返回降级结果（不发请求），其它功能不受任何影响。
+  ai:
+    # 实现选择（M3-11）：`rest` = 自写的 RestClient 版（默认，零框架依赖、超时与"不重试"完全可控）
+    #                   `spring-ai` = Spring AI 的 OpenAiChatModel 版（需要 spring-ai-openai 依赖）
+    # ⚠️ 两个实现读的是**同一份** codelkup.ai.* 配置，切换只影响"谁来发这个请求"；
+    #    写错（既不是 rest 也不是 spring-ai）会导致启动时找不到 AiClient 而失败 —— 这是有意的 fail-fast。
+    impl: ${AI_IMPL:rest}
+    # 总开关：关掉后即使配了 key 也不调用（线上临时止血用，不必改 key）
+    enabled: ${AI_ENABLED:true}
+    # ⚠️ 不提供默认密钥（DoD 第 5 条）：密钥只能从环境变量 / .env 注入。
+    #    留空即"未启用"，不是错误。
+    api-key: ${AI_API_KEY:}
+    base-url: ${AI_BASE_URL:https://api.deepseek.com}
+    model: ${AI_MODEL:deepseek-chat}
+    # 连接与读取超时（毫秒）。8 秒既是"用户还能等"的上限，也与 M3-9 的 P95 ≤8s 目标一致
+    timeout-ms: ${AI_TIMEOUT_MS:8000}
+    # 单次回答上限与采样温度的默认值（调用方可在请求里覆盖）
+    max-tokens: ${AI_MAX_TOKENS:800}
+    temperature: ${AI_TEMPERATURE:0.3}
+    # ---- RAG 问答（M3-6）----
+    # 检索片段数：进 prompt 的条数，也是引用编号 [1..n] 的上限
+    top-k: ${AI_TOP_K:5}
+    # 全站日预算（次/天）：成本即攻击面的第三道闸门。
+    # 只在实际调用 LLM 前计数 —— 命中缓存的请求不消耗（它确实没花钱）
+    daily-budget: ${AI_DAILY_BUDGET:2000}
+    # 问题指纹缓存时长（小时）：同一个问题只付一次费
+    cache-ttl-hours: ${AI_CACHE_TTL_HOURS:6}
+    # 长帖 TL;DR 的正文上限（字符）：超长帖先剥离 Markdown、再截到这么多字进 prompt。
+    # 25000 字的帖子实测正文剥完约 2 万字，截到 6000 字既保住开头要点，
+    # 又把 prompt 稳定在"8 秒超时"能覆盖的量级（§10.4 同样口径：不依赖分词器）
+    summary-max-input-chars: ${AI_SUMMARY_MAX_INPUT_CHARS:6000}
   # ========== 热度分（hot 排序的真实数据来源）==========
   # 模型：MySQL 只存"当前分数"这一列，由定时任务一条 SQL 全量重算。
   #   不做增量维护 —— 时间衰减是随当前时间连续变化的量，增量更新要在读取时补偿，

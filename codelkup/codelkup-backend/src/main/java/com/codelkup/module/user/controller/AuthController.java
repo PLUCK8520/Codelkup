@@ -53,10 +53,24 @@ public class AuthController {
     @Value("${codelkup.rate-limit.register-per-hour:5}")
     private int registerPerHour = 5;
 
+    /** 注册开关（PRE-MORTEM T0-2）：生产/演示站默认仍为 true，由 .env 显式置 false */
+    @Value("${codelkup.auth.registration-enabled:true}")
+    private boolean registrationEnabled = true;
+
+    /** 刷新凭证限流（L-4 补齐）：默认 120 次/小时/IP —— 未认证接口按 IP 反滥用 */
+    @Value("${codelkup.rate-limit.refresh-per-hour:120}")
+    private int refreshPerHour = 120;
+
     @Operation(summary = "注册", description = "注册成功后直接返回双 token，免去二次登录；按 IP 限流")
     @PostMapping("/register")
     public Result<TokenResponse> register(@Valid @RequestBody RegisterRequest request,
                                           HttpServletRequest httpRequest) {
+        // 注册开关（PRE-MORTEM T0-2）：放在限流**之前** —— "开关"是全局运营意图，
+        // 关闭时应当对所有请求给出一致的 40304，而不是先烧注册额度、
+        // 让访客在 42901 与 40304 之间看到两种失败（也让"关不关"与限流状态解耦）。
+        if (!registrationEnabled) {
+            throw new BusinessException(ErrorCode.REGISTRATION_CLOSED);
+        }
         // ⚠️ 注册是"某邮箱是否已注册"的第二个出口：它必然要回答"这个邮箱能不能用"
         //    （EMAIL_ALREADY_EXISTS 与成功创建是可区分的两种结果）。check-email 已按 IP
         //    限流，若这里不限流，批量枚举与批量注册都能绕道这条路 —— 那道限流等于没做。
@@ -83,9 +97,15 @@ public class AuthController {
         return Result.success(userService.login(request, httpRequest.getRemoteAddr()));
     }
 
-    @Operation(summary = "刷新凭证", description = "用 refreshToken 换一对新 token")
+    @Operation(summary = "刷新凭证", description = "用 refreshToken 换一对新 token；按 IP 限流（默认 120 次/小时）")
     @PostMapping("/refresh")
-    public Result<TokenResponse> refresh(@RequestBody Map<String, String> body) {
+    public Result<TokenResponse> refresh(@RequestBody Map<String, String> body,
+                                         HttpServletRequest httpRequest) {
+        // L-4 补齐：这是未认证接口，每次调用都要做 JWT 解析 + Redis 读写 ——
+        // 无限流时可用脚本放大后端成本；按 IP 限额，额度远高于正常设备（30 分钟一换 ≈ 2 次/小时）
+        if (!rateLimitService.tryAcquire("refresh", httpRequest.getRemoteAddr(), refreshPerHour, 60)) {
+            throw new BusinessException(ErrorCode.TOO_MANY_REQUESTS, "刷新过于频繁，请稍后再试");
+        }
         String refreshToken = body == null ? null : body.get("refreshToken");
         if (refreshToken == null || refreshToken.isBlank()) {
             return Result.error(ErrorCode.PARAM_MISSING, "refreshToken 不能为空");

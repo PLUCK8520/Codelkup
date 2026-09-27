@@ -1,6 +1,7 @@
 package com.codelkup.security;
 
 import io.jsonwebtoken.Claims;
+import io.jsonwebtoken.Jws;
 import io.jsonwebtoken.ExpiredJwtException;
 import io.jsonwebtoken.JwtException;
 import io.jsonwebtoken.Jwts;
@@ -92,7 +93,13 @@ public class JwtTokenProvider {
                 .claim(CLAIM_TYPE, type)
                 .issuedAt(now)
                 .expiration(expiry)
-                .signWith(signingKey)
+                // ⚠️ 显式钉住 HS256（安全审计 informational）：JJWT 的 signWith(key) 会按
+                //    密钥长度**自动选算法**（实测 58 字节 → HS384），算法随密钥长度漂移、
+                //    与文档不符；显式指定后行为恒定，解析侧也显式校验 header.alg 必须为
+                //    HS256（见 parse，F5 收紧）——"两端只认 HS256"由代码保证。
+                //    ⚠️ 唯一一次性代价：更换算法后已签发的旧 token 全部失效（解析签名不匹配），
+                //    本项目尚处部署前、无真实用户，属可接受的一次性切换。
+                .signWith(signingKey, Jwts.SIG.HS256)
                 .compact();
     }
 
@@ -105,12 +112,19 @@ public class JwtTokenProvider {
      */
     public Claims parse(String token) {
         try {
-            return Jwts.parser()
+            Jws<Claims> jws = Jwts.parser()
                     .verifyWith(signingKey)
                     .requireIssuer(issuer)
                     .build()
-                    .parseSignedClaims(token)
-                    .getPayload();
+                    .parseSignedClaims(token);
+            // F5（第二轮审计）：verifyWith 只校验"签名对得上"，同 key 的 HS384/HS512
+            // 也会验签通过；显式比对 header.alg 才真正让"两端都只认 HS256"成立
+            // （无伪造面 —— 伪造仍需密钥；这是把注释承诺变成代码承诺）。
+            if (!"HS256".equals(jws.getHeader().getAlgorithm())) {
+                log.debug("token 算法不符（应为 HS256）| alg={}", jws.getHeader().getAlgorithm());
+                return null;
+            }
+            return jws.getPayload();
         } catch (ExpiredJwtException e) {
             log.debug("token 已过期 | {}", e.getMessage());
             return null;

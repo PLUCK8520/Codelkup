@@ -120,4 +120,45 @@ class LoginAttemptServiceTest {
         verify(redis, never()).delete(RedisKeys.LOGIN_FAIL_BY_IP + IP);
         verify(redis, times(1)).delete(anyString());
     }
+
+    // ==================== 改密失败锁定（M-1 修复：userId 维度） ====================
+
+    private static final String PWD_KEY_42 = RedisKeys.LOGIN_FAIL_COUNT + "pwd:42";
+
+    @Test
+    void pwdChange_blocksAtThreshold() {
+        when(ops.get(PWD_KEY_42)).thenReturn("5");
+
+        BusinessException e = assertThrows(BusinessException.class,
+                () -> service.checkPasswordChangeNotLocked(42L));
+
+        assertEquals(ErrorCode.LOGIN_ATTEMPT_EXCEEDED, e.getErrorCode());
+    }
+
+    @Test
+    void pwdChange_underThreshold_passes() {
+        when(ops.get(PWD_KEY_42)).thenReturn("4");
+
+        assertDoesNotThrow(() -> service.checkPasswordChangeNotLocked(42L));
+    }
+
+    @Test
+    void pwdChange_recordFailure_usesUserDimension_withLockWindow() {
+        when(ops.increment(anyString())).thenReturn(1L);
+
+        service.recordPasswordChangeFailure(42L);
+
+        verify(ops).increment(PWD_KEY_42);
+        verify(redis).expire(PWD_KEY_42, 15L, TimeUnit.MINUTES);
+        // 只记 userId 一个维度：不能顺带污染登录的 IP/邮箱计数键
+        verify(ops, times(1)).increment(anyString());
+    }
+
+    @Test
+    void pwdChange_clearFailure_deletesOnlyItsKey() {
+        service.clearPasswordChangeFailure(42L);
+
+        verify(redis).delete(PWD_KEY_42);
+        verify(redis, times(1)).delete(anyString());
+    }
 }

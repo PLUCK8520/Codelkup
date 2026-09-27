@@ -86,10 +86,4 @@ public interface UserActionMapper extends BaseMapper<UserAction> {
                                     @Param("targetType") int targetType,
                                     @Param("actionType") int actionType,
                                     @Param("targetIds") List<Long> targetIds);
-
-    /** 某用户点赞过的帖子 ID（分页在 Service 层用 PageHelper 或手动切分，MVP 先全量） */
-    @Select("SELECT target_id FROM t_user_action "
-            + "WHERE user_id = #{userId} AND target_type = 1 AND action_type = 1 "
-            + "ORDER BY create_time DESC")
-    List<Long> selectLikedPostIds(@Param("userId") Long userId);
 }

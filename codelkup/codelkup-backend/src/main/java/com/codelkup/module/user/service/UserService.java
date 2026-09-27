@@ -5,7 +5,10 @@ import com.codelkup.module.user.dto.RegisterRequest;
 import com.codelkup.module.user.dto.TokenResponse;
 import com.codelkup.module.user.entity.User;
 import com.codelkup.module.user.vo.CurrentUserVO;
+import com.codelkup.module.user.vo.RankingUserVO;
 import com.codelkup.module.user.vo.UserVO;
+
+import java.util.List;
 
 /**
  * 用户与认证服务。
@@ -51,6 +54,13 @@ public interface UserService {
 
     /** 更新头像 URL */
     CurrentUserVO updateAvatar(Long userId, String avatarUrl);
+
+    /**
+     * 声望榜（只读，公开）。
+     *
+     * @param limit 取前 N 名（1~50，上限由 Controller 的参数校验保证）
+     */
+    List<RankingUserVO> topByReputation(int limit);
 
     /** 某用户的公开帖子由 PostService 提供，此处仅暴露必要的用户查询 */
 }

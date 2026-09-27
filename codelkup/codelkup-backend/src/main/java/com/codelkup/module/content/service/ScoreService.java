@@ -1,12 +1,17 @@
 package com.codelkup.module.content.service;
 
 import com.codelkup.module.content.mapper.PostMapper;
+import io.micrometer.core.instrument.Gauge;
+import io.micrometer.core.instrument.MeterRegistry;
 import jakarta.annotation.PostConstruct;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
+
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicInteger;
 
 /**
  * 热度分计算服务。
@@ -39,6 +44,12 @@ import org.springframework.stereotype.Service;
 public class ScoreService {
 
     private final PostMapper postMapper;
+
+    /** 指标注册表（M3-10）：重算耗时、影响行数、开关状态 */
+    private final MeterRegistry meterRegistry;
+
+    /** 最近一次重算的影响行数；-1 = 还没跑过（见 registerMetrics 的说明） */
+    private final AtomicInteger lastAffectedRows = new AtomicInteger(-1);
 
     /** 总开关：压测/排障时可以先关掉，避免定时任务干扰观察 */
     @Value("${codelkup.score.enabled:true}")
@@ -101,14 +112,36 @@ public class ScoreService {
         long start = System.currentTimeMillis();
         try {
             int affected = postMapper.recalcScores(likeWeight, collectWeight, commentWeight, decayLambda);
-            log.info("热度分重算完成 | 影响行数={} | 耗时={}ms",
-                    affected, System.currentTimeMillis() - start);
+            long elapsed = System.currentTimeMillis() - start;
+            // 指标（M3-10）：耗时分布 + 最近一次影响行数
+            meterRegistry.timer("codelkup.score.rebuild").record(elapsed, TimeUnit.MILLISECONDS);
+            lastAffectedRows.set(affected);
+            log.info("热度分重算完成 | 影响行数={} | 耗时={}ms", affected, elapsed);
             return affected;
         } catch (Exception e) {
+            meterRegistry.counter("codelkup.score.rebuild.failed").increment();
             // 保留上一轮分数：排序暂时不新鲜好过列表整体异常
             log.error("热度分重算失败，保留上次分数 | 耗时={}ms",
                     System.currentTimeMillis() - start, e);
             return -1;
         }
+    }
+
+    /**
+     * 注册 Gauge（M3-10）。
+     *
+     * <p>为什么用<b>字段持有的 AtomicInteger</b> 而不是每次 {@code gauge(name, number)}：
+     * Micrometer 的 Gauge 持有的是那个 Number 实例的**弱引用**，随手 new 一个会立刻被 GC，
+     * 指标就"时有时无"。字段持有 + 只在注册时绑定一次，才是稳定写法。
+     *
+     * <p>{@code lastAffectedRows} 初值 <b>-1</b>（不是 0）：0 行是"跑过且无变化"，
+     * 而 -1 是"还没跑过" —— 两者在排障时含义完全不同（与前端"失败不显示 0"同一口径）。
+     */
+    @PostConstruct
+    void registerMetrics() {
+        meterRegistry.gauge("codelkup.score.last_affected_rows", lastAffectedRows);
+        Gauge.builder("codelkup.score.enabled", this, s -> s.enabled ? 1 : 0)
+                .description("热度分定时重算是否开启（1=开）")
+                .register(meterRegistry);
     }
 }

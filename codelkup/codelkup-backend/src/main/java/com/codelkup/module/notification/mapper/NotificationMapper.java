@@ -3,11 +3,16 @@ package com.codelkup.module.notification.mapper;
 import com.baomidou.mybatisplus.core.mapper.BaseMapper;
 import com.baomidou.mybatisplus.core.metadata.IPage;
 import com.codelkup.module.notification.entity.Notification;
+import com.codelkup.module.notification.vo.NotificationTypeUnreadVO;
 import com.codelkup.module.notification.vo.NotificationVO;
 import org.apache.ibatis.annotations.Mapper;
 import org.apache.ibatis.annotations.Param;
+import org.apache.ibatis.annotations.Result;
+import org.apache.ibatis.annotations.Results;
 import org.apache.ibatis.annotations.Select;
 import org.apache.ibatis.annotations.Update;
+
+import java.util.List;
 
 /**
  * 通知 Mapper。
@@ -26,26 +31,70 @@ public interface NotificationMapper extends BaseMapper<Notification> {
      *
      * <p>{@code LEFT JOIN t_user}：系统通知的 {@code sender_id} 是 NULL。
      * 用 INNER JOIN 会把系统通知整个过滤掉，所以必须 LEFT。
+     *
+     * <p>★ V0.4 新增 {@code types}：通知中心的类型分组（tab）筛选。
+     * <b>用 IN 而不是 {@code type = #{type}}</b>：前端的「评论与回复」tab 同时包含
+     * 1（评论）与 2（回复）—— 对用户来说两者都是"有人回了我"，拆成两个 tab 反而难找。
+     * 参数为 null 或空集合时整个条件不拼，等同"全部类型"。
+     *
+     * <p>★ 第三轮审计新增 {@code target_post_id}：{@code target_type = 2}（评论点赞）时
+     * 由 {@code LEFT JOIN t_comment} 解析出评论所属帖子 —— 前端据此仍跳转到帖子看上下文，
+     * 不必再为"这条评论属于哪个帖子"多发一次请求（与举报模块的 {@code ReportAdminVO.targetPostId} 同一手法）。
+     * 评论已被删时该列为 NULL，前端据此显示为不可点击，符合"删了就别再引路"的口径。
      */
     @Select("""
             <script>
             SELECT n.id, n.type, n.sender_id, n.target_type, n.target_id,
                    n.content, n.is_read, n.create_time,
-                   u.nickname AS sender_nickname, u.avatar AS sender_avatar
+                   u.nickname AS sender_nickname, u.avatar AS sender_avatar,
+                   CASE WHEN n.target_type = 2 THEN c.post_id ELSE n.target_id END AS target_post_id
             FROM t_notification n
             LEFT JOIN t_user u ON u.id = n.sender_id
+            LEFT JOIN t_comment c ON n.target_type = 2 AND c.id = n.target_id
             WHERE n.receiver_id = #{receiverId}
             <if test="onlyUnread"> AND n.is_read = 0 </if>
+            <if test="types != null and types.size() > 0">
+                AND n.type IN
+                <foreach collection="types" item="t" open="(" separator="," close=")">#{t}</foreach>
+            </if>
             ORDER BY n.create_time DESC, n.id DESC
             </script>
             """)
     IPage<NotificationVO> selectPage(IPage<NotificationVO> page,
                                      @Param("receiverId") Long receiverId,
-                                     @Param("onlyUnread") boolean onlyUnread);
+                                     @Param("onlyUnread") boolean onlyUnread,
+                                     @Param("types") List<Integer> types);
 
     /** 未读数 —— 顶栏角标，高频调用，走 idx_receiver_read 的等值前缀 */
     @Select("SELECT COUNT(*) FROM t_notification WHERE receiver_id = #{receiverId} AND is_read = 0")
     int countUnread(@Param("receiverId") Long receiverId);
+
+    /**
+     * 各类型的未读数 —— 通知中心的分组角标。
+     *
+     * <p>一条 {@code GROUP BY} 顶掉"每个 tab 各发一次 COUNT"。
+     * 走 {@code idx_receiver_read} 的等值前缀（receiver_id + is_read 都在索引里）
+     * 回表取 type，千人级通知表上是毫秒级。
+     *
+     * <p>⚠️ 必须用 {@code @Results} 显式把 {@code cnt} 映射到 {@code count}：
+     * 全局的驼峰映射只处理"下划线 → 驼峰"，而列别名 {@code cnt} 与属性名
+     * {@code count} 之间没有这种关系 —— 不写这段会得到一个 count 恒为 null 的结果，
+     * 而且是静默的（前端只会看到角标不显示）。
+     *
+     * <p>不返回"未读为 0 的类型"：让数据库决定哪些类型有数据，
+     * 调用方按 0 处理即可，也免得类型新增时要同步维护一份清单。
+     */
+    @Select("""
+            SELECT type, COUNT(*) AS cnt
+            FROM t_notification
+            WHERE receiver_id = #{receiverId} AND is_read = 0
+            GROUP BY type
+            """)
+    @Results({
+            @Result(column = "type", property = "type"),
+            @Result(column = "cnt", property = "count")
+    })
+    List<NotificationTypeUnreadVO> countUnreadByType(@Param("receiverId") Long receiverId);
 
     /** 全部标记已读 */
     @Update("UPDATE t_notification SET is_read = 1 WHERE receiver_id = #{receiverId} AND is_read = 0")
