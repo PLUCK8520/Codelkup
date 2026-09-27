@@ -101,6 +101,19 @@ check('站内图片路径保留且补懒加载', okImg.includes('/uploads/avatar
 const okXssImg = render('<img src="https://cdn.example.com/a.webp" onerror="alert(1)">')
 check('外站图片保留但 onerror 被剔除', okXssImg.includes('cdn.example.com/a.webp') && !okXssImg.includes('onerror'), okXssImg)
 
+/* ============ 用例 4：非外链不残留 target（informational 修复） ============ */
+const mailto = render('<a href="mailto:a@b.com" target="_blank">邮件</a>')
+check('mailto 链接：target 被清除', mailto.includes('mailto:a@b.com') && !mailto.includes('target='), mailto)
+
+const localTarget = render('<a href="/docs/x" target="_blank" rel="noopener">站内</a>')
+check('站内链接：自带 target 被清除', localTarget.includes('href="/docs/x"') && !localTarget.includes('target='), localTarget)
+
+const anchorTarget = render('<a href="#s" target="_blank">锚点</a>')
+check('锚点：target 被清除', anchorTarget.includes('#s') && !anchorTarget.includes('target='), anchorTarget)
+
+const extTarget = render('<a href="https://example.com/x" target="_self">外链</a>')
+check('外链：target 统一由 hook 补为 _blank（回归）', extTarget.includes('target="_blank"'), extTarget)
+
 /* ============ 收尾 ============ */
 await vite.close()
 

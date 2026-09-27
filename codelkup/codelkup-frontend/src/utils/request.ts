@@ -31,6 +31,17 @@ export const tokenStorage = {
   },
 }
 
+/**
+ * 请求配置（在 axios 原生配置上追加本项目自己的标志位）。
+ *
+ * `silent`：失败不弹全局提示，由调用方自行处理 —— 用于"后台自动行为"
+ * （草稿自动保存等）。这类请求失败时都有降级路径（本地草稿兜底），
+ * 弹提示既不解决任何问题，又会在自动保存的节拍上反复打扰用户。
+ */
+export interface RequestConfig extends AxiosRequestConfig {
+  silent?: boolean
+}
+
 /* ==================== 请求实例 ==================== */
 
 const http: AxiosInstance = axios.create({
@@ -183,13 +194,19 @@ http.interceptors.response.use(
             : '网络异常，请检查连接')
 
     // 403/404 之类的偶发错误不打扰用户；真正需要用户知晓的才弹提示
-    if (![403, 404].includes(response?.status) || bizCode) {
+    // （silent 请求一律不弹：它们失败后的收尾由调用方负责）
+    if ((![403, 404].includes(response?.status) || bizCode) && !isSilent(originalRequest)) {
       ElMessage.error(message)
     }
 
     return Promise.reject(error)
   },
 )
+
+/** 静默请求判定：标记位随 axios 合并后的 config 一路带到错误分支 */
+function isSilent(config?: AxiosRequestConfig): boolean {
+  return (config as RequestConfig | undefined)?.silent === true
+}
 
 /* ==================== 业务层解包 ==================== */
 
@@ -199,7 +216,7 @@ http.interceptors.response.use(
  * 后端约定 HTTP 200 + code!==0 也算业务失败，
  * 所以这里再判一次 code，把业务错误统一抛出去。
  */
-export async function request<T>(config: AxiosRequestConfig): Promise<T> {
+export async function request<T>(config: RequestConfig): Promise<T> {
   const response = await http.request<ApiResult<T>>(config)
   const body = response.data
 
@@ -213,8 +230,8 @@ export async function request<T>(config: AxiosRequestConfig): Promise<T> {
     //    实测踩过：密码输错登录、改密时原密码填错，界面都毫无反馈
     //    （更糟的是各处 catch 里都写着"拦截器已统一提示"，于是谁也没提示）。
     //    只有凭证失效的 40101/40102/40103 除外 —— 它们由上面的刷新/跳登录流程统一处理，
-    //    这里再弹一次就是重复打扰。
-    if (!isAuthExpired(body)) {
+    //    这里再弹一次就是重复打扰；silent 请求（自动保存等）也除外。
+    if (!isAuthExpired(body) && !config.silent) {
       ElMessage.error(err.message)
     }
     throw err

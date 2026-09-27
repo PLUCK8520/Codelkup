@@ -6,19 +6,32 @@
  *   /                → 全部帖子
  *   /boards/:slug    → 某板块
  * 查询参数：sort=latest|hot|active, tag=标签ID, page=页码
+ *
+ * ★ V0.4 首页信息密度改版（本轮，零后端改动）：
+ *   1. Hero 统计 3 项 → 4 项，并**统一成精确值**：原来用 formatCount 把 10119 缩写成
+ *      "10k"，与下方列表的"共 10119 篇"同屏并存 —— 同一件事两个数字，读起来像不严谨。
+ *      新增的「待解决」是行动号召（点开就是 /questions），也是唯一会随时间变化的那个数。
+ *   2. 侧栏的「板块 / 标签」变成**预览 + 入口**：板块只列前 6（当前板块必定在列，
+ *      否则板块页会找不到高亮项），更多走 `/boards`；标签同理走 `/tags`。
+ *      这两个页面是 M4 才有的 —— 在此之前侧栏只能当"全集容器"用。
+ *   3. 侧栏新增「活跃作者」（复用排行榜接口取前 5），并**移除「关于 Codelkup」卡片**：
+ *      它那三句话与 Hero 副标题、页脚里的技术栈完全重复，却占着约 150px 把侧栏顶出视口
+ *      （sticky 侧栏一旦高过视口，最底下的卡片实际就看不到了）。
  */
 import { computed, ref, watch } from 'vue'
 import { useRoute, useRouter, type LocationQueryRaw } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import { postApi } from '@/api/post'
+import { statsApi } from '@/api/stats'
 import { feedApi } from '@/api/social'
+import { userApi } from '@/api/user'
 import { useAuthStore } from '@/stores/auth'
 import { useMetaStore } from '@/stores/meta'
 import PostCard from '@/components/PostCard.vue'
 import PostListSkeleton from '@/components/PostListSkeleton.vue'
 import EmptyState from '@/components/EmptyState.vue'
-import { formatCount } from '@/utils/format'
-import type { PostListVO, PostQueryRequest } from '@/types/api'
+import UserAvatar from '@/components/UserAvatar.vue'
+import type { PostListVO, PostQueryRequest, RankingUserVO, SiteStatsVO } from '@/types/api'
 
 const route = useRoute()
 const router = useRouter()
@@ -30,6 +43,23 @@ const total = ref(0)
 const pages = ref(0)
 const loading = ref(true)
 const error = ref('')
+
+/** 侧栏「活跃作者」：复用排行榜接口取前 5（零后端改动）。拉不到就整块不渲染 */
+const topAuthors = ref<RankingUserVO[]>([])
+
+/**
+ * Hero 的社区计数（板块 / 标签 / 待解决）—— 来自 /api/stats 的服务端聚合。
+ *
+ * 为什么不再拼"字典长度"：板块字典是 app 启动时的内存快照、热门标签默认只取
+ * 20 条 —— 拿它们当"全站有多少"，会在数据超过上限或字典过期时悄悄撒谎。
+ * 聚合接口给的是**当前全量、同一时刻**的三个数。
+ * 拿不到（null）时：待解决整项不显示、板块 / 标签退回字典长度（即旧行为），
+ * 任何情况下都不显示 0 —— 与全站"失败态不显示 0"同一口径。
+ */
+const siteStats = ref<SiteStatsVO | null>(null)
+
+/** 侧栏板块预览条数：更多走 `/boards` */
+const SIDEBAR_BOARD_LIMIT = 6
 
 const page = ref(1)
 const size = 20
@@ -185,16 +215,48 @@ const showHero = computed(
  * Hero 里的社区统计。
  *
  * ⚠️ 全部取自真实数据源，**不编造任何增长数字**。
- *    设计系统的转化策略里明确要求："Show member and activity counts
- *    only when current, verified, and dated" —— 编一个"今日新增 128 帖"
- *    在个人项目里既无来源也经不起追问。
- *    加载中显示 "—" 而不是 0：0 是"真的没有"，破折号是"还不知道"。
+ *
+ * ⚠️ 数字来源只有两处：帖子总数（列表接口）与全站计数（`/api/stats` 服务端聚合，
+ *    含板块 / 标签 / 待解决三项）；字典长度只作为聚合失败时的降级显示。
+ *    设计系统的转化策略建议 "Show member and activity counts"，但它同时要求
+ *    "only when current, verified, and dated" —— 编一个"今日新增 128 帖"在个人项目里
+ *    既没有来源也经不起追问，所以这里**不做时间维度的数字**（实测今日确实有 44 帖，
+ *    但新部署的库当天必然是 0，摆一个"今日 0 帖"比不摆更伤）。
+ *
+ * ★ 本轮两点改动：
+ *   - 去掉 formatCount 缩写：`10119` 曾被缩成 "10k"，与列表上方的"共 10119 篇"
+ *     同屏并存 —— 同一件事两个数字，是"看起来不严谨"的典型来源。宁可要精确值。
+ *   - 增加「待解决」：它是行动号召（点进去就是 /questions），也是这里唯一会变的数字；
+ *     拉不到时整项不显示（不显示 0）。
  */
-const heroStats = computed(() => [
-  { value: loading.value ? '—' : formatCount(total.value), label: '篇讨论' },
-  { value: formatCount(meta.boards.length), label: '个板块' },
-  { value: formatCount(meta.hotTags.length), label: '个技术标签' },
-])
+const heroStats = computed(() => {
+  const stats: { value: number | string; label: string }[] = [
+    { value: loading.value ? '—' : total.value, label: '篇讨论' },
+  ]
+  if (siteStats.value !== null) {
+    stats.push({ value: siteStats.value.questionUnsolvedCount, label: '个待解决' })
+  }
+  // 板块 / 标签：优先聚合值（全量口径）；聚合没拿到时退回字典长度（旧的降级行为）
+  stats.push({ value: siteStats.value?.boardCount ?? meta.boards.length, label: '个板块' })
+  stats.push({ value: siteStats.value?.tagCount ?? meta.hotTags.length, label: '个技术标签' })
+  return stats
+})
+
+/**
+ * 侧栏只列前 6 个板块，其余走 `/boards`。
+ *
+ * ⚠️ 当前板块**必须**在列表里：板块页的高亮就靠这一列（`active` 类）。
+ *    若正在看的板块排在第 7 位之后，只取前 6 会让"我在哪个板块"这个信息消失 ——
+ *    所以命中当前板块时把它补进列表。
+ */
+const sidebarBoards = computed(() => {
+  const head = meta.boards.slice(0, SIDEBAR_BOARD_LIMIT)
+  const active = currentBoard.value
+  if (active && !head.some((b) => b.id === active.id)) {
+    return [...head, active]
+  }
+  return head
+})
 
 /** Hero 主 CTA：未登录先去登录，已登录直接开写 */
 function onHeroPrimary() {
@@ -251,6 +313,19 @@ watch(
 // 侧栏数据
 meta.loadBoards()
 meta.loadHotTags()
+// 附加信息：失败静默 —— 侧栏卡片与 Hero 计数是锦上添花，不该让页面主体受牵连
+userApi
+  .ranking(5)
+  .then((rows) => {
+    topAuthors.value = rows
+  })
+  .catch(() => {})
+statsApi
+  .overview()
+  .then((s) => {
+    siteStats.value = s
+  })
+  .catch(() => {})
 </script>
 
 <template>
@@ -411,7 +486,7 @@ meta.loadHotTags()
 
     <!-- ==================== 侧栏 ==================== -->
     <aside class="side-col">
-      <!-- 板块导航 -->
+      <!-- 板块导航：预览前 6 + 入口（全集在 /boards，那里还有每个板块的简介） -->
       <section class="side-card">
         <h2 class="side-title">板块</h2>
         <nav class="board-nav">
@@ -423,7 +498,7 @@ meta.loadHotTags()
             <span class="board-name">全部讨论</span>
           </RouterLink>
           <RouterLink
-            v-for="board in meta.boards"
+            v-for="board in sidebarBoards"
             :key="board.id"
             :to="{ name: 'board', params: { slug: board.slug } }"
             class="board-item"
@@ -433,9 +508,10 @@ meta.loadHotTags()
             <span v-if="board.postCount > 0" class="board-count">{{ board.postCount }}</span>
           </RouterLink>
         </nav>
+        <RouterLink :to="{ name: 'boards' }" class="side-more">全部板块 →</RouterLink>
       </section>
 
-      <!-- 热门标签 -->
+      <!-- 热门标签：同样只做预览，全集在 /tags -->
       <section v-if="meta.hotTags.length" class="side-card">
         <h2 class="side-title">热门标签</h2>
         <div class="tag-cloud">
@@ -450,17 +526,31 @@ meta.loadHotTags()
             {{ tag.name }}
           </button>
         </div>
+        <RouterLink :to="{ name: 'tags' }" class="side-more">全部标签 →</RouterLink>
       </section>
 
-      <!-- 关于 -->
-      <section class="side-card about-card">
-        <h2 class="side-title">关于 Codelkup</h2>
-        <p class="about-text">
-          面向开发者的技术问答与讨论社区。支持 Markdown 发帖、
-          标签分类与中文全文检索。
-        </p>
-        <p class="about-stack">Spring Boot 3.5 · Vue 3 · MySQL ngram</p>
+      <!-- 活跃作者（复用排行榜接口的前 5）：给"这个社区有活人"一个证据，
+           同时把流量导向 /ranking —— 榜单页此前只有顶栏一个入口 -->
+      <section v-if="topAuthors.length" class="side-card">
+        <h2 class="side-title">活跃作者</h2>
+        <ul class="author-list">
+          <li v-for="a in topAuthors" :key="a.id">
+            <RouterLink
+              :to="{ name: 'user-profile', params: { id: a.id } }"
+              class="author-row"
+            >
+              <UserAvatar :src="a.avatar" :name="a.nickname" :seed="a.id" :size="26" />
+              <span class="author-name">{{ a.nickname }}</span>
+              <span class="author-rep">{{ a.reputation }}</span>
+            </RouterLink>
+          </li>
+        </ul>
+        <RouterLink :to="{ name: 'ranking' }" class="side-more">完整榜单 →</RouterLink>
       </section>
+
+      <!-- 「关于 Codelkup」卡片本轮移除：它的三句话与 Hero 副标题、页脚里的技术栈重复，
+           却占着约 150px 把 sticky 侧栏顶出视口（超出视口高度的部分基本看不到）。
+           内容都在别处：品牌与定位见 Hero，技术栈见页脚。 -->
     </aside>
   </div>
 </template>
@@ -858,19 +948,66 @@ meta.loadHotTags()
   border-color: var(--color-accent-solid);
 }
 
-.about-card .about-text {
-  font-size: var(--text-sm);
-  line-height: var(--leading-normal);
-  color: var(--color-muted-foreground);
-}
-
-.about-stack {
+/* 侧栏「更多」入口：把"预览"与"全集"分开 ——
+   这一列不再需要装下所有板块/标签，长度也就压住了
+   （sticky 侧栏一旦高过视口，最底下的卡片实际看不到） */
+.side-more {
+  display: block;
+  width: 100%;
   margin-top: var(--space-3);
   padding-top: var(--space-3);
   border-top: 1px solid var(--color-border-subtle);
-  font-family: var(--font-mono);
-  font-size: 11px;
+  font-size: var(--text-xs);
+  color: var(--color-muted-foreground);
+}
+
+.side-more:hover {
+  color: var(--color-accent);
+}
+
+/* ---------- 活跃作者 ---------- */
+.author-list {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+/* padding 与 .board-item 对齐，两列名单的左边界一致 */
+.author-row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-2) var(--space-3);
+  border-radius: var(--radius-md);
+  transition: background var(--transition-fast);
+}
+
+.author-row:hover {
+  background: var(--color-muted);
+}
+
+.author-name {
+  flex: 1;
+  min-width: 0;
+  font-size: var(--text-sm);
+  color: var(--color-muted-foreground);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.author-row:hover .author-name {
+  color: var(--color-foreground);
+}
+
+.author-rep {
+  flex-shrink: 0;
+  font-size: var(--text-xs);
   color: var(--color-subtle-foreground);
+  font-variant-numeric: tabular-nums;
 }
 
 /* ---------- 响应式 ---------- */

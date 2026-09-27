@@ -173,7 +173,10 @@ async function load(force = false) {
   }
 }
 
-onMounted(() => load())
+// 强制刷新（force=true）：板块字典是 app 级缓存（首屏加载过一次就不再请求），
+// 而本页计数行是"各板块 post_count 之和" —— 用缓存会得到可能过期的总数
+// （别人发过帖后，本页必须重新取数才准）。代价只是一个小字典请求。
+onMounted(() => load(true))
 </script>
 
 <template>

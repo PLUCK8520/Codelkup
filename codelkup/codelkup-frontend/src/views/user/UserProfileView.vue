@@ -194,8 +194,10 @@ function changePage(p: number) {
             <!-- 等级徽章：与 stat 里的"Lv.N"同源（UserVO.level），这里放在昵称旁是身份标识，
                  stat 里那格给的是数值上下文（声望 + 等级一起看） -->
             <LevelBadge :level="user.level" :reputation="user.reputation" />
-            <span v-if="user.role === 2" class="role-badge role-admin">管理员</span>
-            <span v-else-if="user.role === 1" class="role-badge role-mod">版主</span>
+            <!-- 角色徽章只在本人视角显示：公开接口不再返回 role（L-2 修复，防枚举管理员），
+                 本人身份从 auth store 取（由 /users/me 提供） -->
+            <span v-if="isSelf && auth.user?.role === 2" class="role-badge role-admin">管理员</span>
+            <span v-else-if="isSelf && auth.user?.role === 1" class="role-badge role-mod">版主</span>
             <span v-if="isSelf" class="role-badge role-self">这是你</span>
           </div>
 
@@ -207,14 +209,22 @@ function changePage(p: number) {
           </div>
 
           <div class="profile-stats">
-            <div class="stat">
+            <!-- 粉丝 / 关注 两个数字变成入口：此前它们只是"看着像数据"的死数字，
+                 而列表接口从 Sprint 4 就写好了（本轮零后端改动） -->
+            <RouterLink
+              :to="{ name: 'user-followers', params: { id: user.id } }"
+              class="stat stat-link"
+            >
               <span class="stat-num">{{ formatCount(followState?.followerCount ?? 0) }}</span>
               <span class="stat-label">粉丝</span>
-            </div>
-            <div class="stat">
+            </RouterLink>
+            <RouterLink
+              :to="{ name: 'user-followees', params: { id: user.id } }"
+              class="stat stat-link"
+            >
               <span class="stat-num">{{ formatCount(followState?.followeeCount ?? 0) }}</span>
               <span class="stat-label">关注</span>
-            </div>
+            </RouterLink>
             <div class="stat">
               <span class="stat-num">{{ formatCount(user.reputation) }}</span>
               <span class="stat-label">声望</span>
@@ -402,6 +412,12 @@ function changePage(p: number) {
 .stat-label {
   font-size: var(--text-xs);
   color: var(--color-subtle-foreground);
+}
+
+/* 粉丝 / 关注变成链接后给一个弱提示：数字本身颜色由 .stat-num 决定，
+   a 的强调色不会渗进来，所以只需在 hover 时点亮标签 —— 不需要大面积改色 */
+.stat-link:hover .stat-label {
+  color: var(--color-accent);
 }
 
 .profile-actions {

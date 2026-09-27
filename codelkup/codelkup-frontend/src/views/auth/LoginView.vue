@@ -46,8 +46,13 @@ async function onSubmit() {
     ElMessage.success(`欢迎回来，${auth.user?.nickname || ''}`)
 
     // 登录后回到被拦截前的页面；没有则回首页
+    // 纵深防御（安全审计 informational）：显式只接受站内路径 —— vue-router 现在会按
+    // 站内路径解析裸字符串，但那是框架的隐式行为；显式校验后，将来升级路由库语义
+    // 也不会把 `//evil.com` 这类值当成可导航目标
     const redirect = route.query.redirect as string | undefined
-    router.replace(redirect || { name: 'home' })
+    const safeRedirect =
+      redirect && redirect.startsWith('/') && !redirect.startsWith('//') ? redirect : null
+    router.replace(safeRedirect || { name: 'home' })
   } catch {
     // 错误提示已由 request 拦截器统一弹出，这里只需恢复按钮状态
   } finally {

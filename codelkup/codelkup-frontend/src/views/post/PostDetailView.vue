@@ -16,8 +16,10 @@ import { postActionApi } from '@/api/interaction'
 import { useAuthStore } from '@/stores/auth'
 import UserAvatar from '@/components/UserAvatar.vue'
 import MarkdownViewer from '@/components/MarkdownViewer.vue'
+import PostTldr from '@/components/PostTldr.vue'
 import EmptyState from '@/components/EmptyState.vue'
 import CommentSection from '@/components/CommentSection.vue'
+import ReportDialog from '@/components/ReportDialog.vue'
 import { formatDateTime, formatRelativeTime, formatCount } from '@/utils/format'
 import type { PostDetailVO } from '@/types/api'
 
@@ -59,8 +61,11 @@ async function load() {
     collectCount.value = data.collectCount
   } catch (e) {
     const code = (e as Error & { code?: number }).code
-    // 40401 = 帖子不存在（后端业务码）；也可能被删除或审核中
-    if (code === 40401) {
+    // 40402 = 帖子不存在（ErrorCode.POST_NOT_FOUND）；也可能是被作者删除、
+    // 被管理员删除（含举报删帖）或仍在审核中。
+    // ⚠️ 这里原本判的是 40401（USER_NOT_FOUND）—— 条件永远不成立，于是"帖子不存在"
+    //    那个 EmptyState 成了死代码，删帖后的旧链接只显示一句"加载失败"。
+    if (code === 40402) {
       notFound.value = true
     } else {
       error.value = e instanceof Error ? e.message : '加载失败'
@@ -75,6 +80,16 @@ watch(postId, load, { immediate: true })
 /** 能否编辑：后端在 detail 里算了 canEdit（作者本人或管理员） */
 const canEdit = computed(() => post.value?.canEdit === true)
 const canModerate = computed(() => auth.canModerate)
+
+/* ---------- 举报（V0.5 / M5） ----------
+ * 游客与作者本人都不显示入口：未登录点了只会被 40101 拦下，
+ * 自己的帖子下面该出现的是"编辑 / 删除"而不是"举报"。
+ * （后端同样会以 40001 拒绝自举报 —— 前端隐藏是体验，后端拦截才是边界。）
+ */
+const reportVisible = ref(false)
+const canReport = computed(
+  () => auth.isLoggedIn && post.value !== null && post.value.authorId !== auth.user?.id,
+)
 
 /** 点赞：乐观更新 + 失败回滚。与评论点赞同一套模式 */
 async function onToggleLike() {
@@ -323,6 +338,9 @@ async function onFeature(action: 'top' | 'featured') {
             </button>
           </div>
 
+          <!-- ★ AI 摘要（M3-8）：放在正文之前 —— 读者先看要点，再决定要不要读全文 -->
+          <PostTldr :post-id="postId" />
+
           <!-- ★ Markdown 正文：必须走 MarkdownViewer（内含 DOMPurify 消毒） -->
           <div class="post-content">
             <MarkdownViewer :content="post.content" />
@@ -349,7 +367,10 @@ async function onFeature(action: 'top' | 'featured') {
                  点过赞/收藏时用强调色 + aria-pressed 表达"已激活"状态。
                  未登录不禁用按钮 —— 而是引导去登录，比灰掉更友好。 -->
             <div class="interactions">
+              <!-- 自赞拦截（L-1）：自己的帖子不显示点赞按钮（后端同样硬拦 40001）；
+                   收藏保留 —— 收藏是书签语义，允许收藏自己的帖子 -->
               <button
+                v-if="post.authorId !== auth.user?.id"
                 type="button"
                 class="act-btn"
                 :class="{ 'is-active': liked }"
@@ -373,6 +394,17 @@ async function onFeature(action: 'top' | 'featured') {
                 <span aria-hidden="true">★</span>
                 {{ collected ? '已收藏' : '收藏' }}
                 <span class="act-count">{{ formatCount(collectCount) }}</span>
+              </button>
+
+              <!-- 举报（V0.5）：游客与作者本人不显示，见 script 里的 canReport 说明 -->
+              <button
+                v-if="canReport"
+                type="button"
+                class="act-btn"
+                title="举报这篇帖子"
+                @click="reportVisible = true"
+              >
+                举报
               </button>
             </div>
           </footer>
@@ -404,6 +436,16 @@ async function onFeature(action: 'top' | 'featured') {
           />
           <span class="author-box-name">{{ post.authorNickname || '匿名' }}</span>
         </RouterLink>
+
+        <!-- 高级筛选的入口：跳到搜索页并预置「只看这位作者」。
+             后端搜索接口支持 authorId，但没有"按昵称找用户"的接口，
+             所以作者筛选只能从这种真实上下文进入（不是一个悬空的手填参数）。 -->
+        <RouterLink
+          :to="{ name: 'search', query: { author: post.authorId } }"
+          class="author-search"
+        >
+          搜索 TA 的帖子
+        </RouterLink>
       </section>
 
       <section v-if="post" class="side-card">
@@ -424,6 +466,14 @@ async function onFeature(action: 'top' | 'featured') {
         </dl>
       </section>
     </aside>
+
+    <!-- 举报弹窗（帖子级）：目标用当前帖子 ID -->
+    <ReportDialog
+      v-model:visible="reportVisible"
+      :target-type="1"
+      :target-id="postId"
+      target-label="这篇帖子"
+    />
   </div>
 </template>
 
@@ -700,6 +750,14 @@ async function onFeature(action: 'top' | 'featured') {
   font-size: var(--text-sm);
   font-weight: 600;
   color: var(--color-foreground);
+}
+
+.author-search {
+  display: block;
+  margin-top: var(--space-3);
+  padding-top: var(--space-3);
+  border-top: 1px solid var(--color-border-subtle);
+  font-size: var(--text-xs);
 }
 
 .info-list {

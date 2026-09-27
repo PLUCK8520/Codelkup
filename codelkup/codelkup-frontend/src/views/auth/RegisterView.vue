@@ -6,10 +6,11 @@
  * ⚠️ 这只是**提升体验的预校验**，不能替代后端唯一索引 ——
  *    两次请求之间仍可能被别人注册掉，最终以后端 409 为准。
  */
-import { reactive, ref } from 'vue'
+import { onMounted, reactive, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage, type FormInstance, type FormRules } from 'element-plus'
 import { authApi } from '@/api/user'
+import { systemApi } from '@/api/system'
 import { useAuthStore } from '@/stores/auth'
 import type { RegisterRequest } from '@/types/api'
 
@@ -23,11 +24,25 @@ const checkingEmail = ref(false)
 /** 异步校验结果，null 表示未知/未校验 */
 const emailTaken = ref<boolean | null>(null)
 
+/** 注册开关（PRE-MORTEM T0-2）：关闭时页面展示"暂未开放"并禁用提交 */
+const registrationClosed = ref(false)
+
 const form = reactive<RegisterRequest & { confirmPassword: string }>({
   email: '',
   password: '',
   nickname: '',
   confirmPassword: '',
+})
+
+// 启动即取注册开关：拿不到配置时不阻塞（保持旧行为），最终以后端 40304 为准 ——
+// 与"前端藏入口是体验、后端拦截才是边界"的既有口径一致
+onMounted(async () => {
+  try {
+    const cfg = await systemApi.config()
+    registrationClosed.value = !cfg.registrationEnabled
+  } catch {
+    registrationClosed.value = false
+  }
 })
 
 /** 邮箱异步校验：先跑本地格式校验，再问后端 */
@@ -77,6 +92,10 @@ const rules: FormRules = {
 
 async function onSubmit() {
   if (!formRef.value) return
+  if (registrationClosed.value) {
+    ElMessage.warning('注册暂未开放')
+    return
+  }
   const valid = await formRef.value.validate().catch(() => false)
   if (!valid) return
 
@@ -90,8 +109,11 @@ async function onSubmit() {
     })
     ElMessage.success('注册成功，欢迎加入 Codelkup！')
 
+    // 纵深防御（安全审计 informational）：与登录页同一口径，只接受站内路径
     const redirect = route.query.redirect as string | undefined
-    router.replace(redirect || { name: 'home' })
+    const safeRedirect =
+      redirect && redirect.startsWith('/') && !redirect.startsWith('//') ? redirect : null
+    router.replace(safeRedirect || { name: 'home' })
   } catch {
     // 拦截器已提示
   } finally {
@@ -116,6 +138,16 @@ async function onSubmit() {
 
       <h1 class="auth-title">创建账号</h1>
       <p class="auth-sub">加入开发者技术社区，开始分享与提问</p>
+
+      <!-- 注册开关（PRE-MORTEM T0-2）：关闭时提前告知，而不是让访客填完表单才被拒 -->
+      <el-alert
+        v-if="registrationClosed"
+        type="warning"
+        :closable="false"
+        title="注册暂未开放"
+        description="本站当前为演示环境，暂不开放自助注册；如需体验请联系站长开通账号。"
+        style="margin-bottom: 16px"
+      />
 
       <el-form
         ref="formRef"
@@ -177,6 +209,7 @@ async function onSubmit() {
           type="primary"
           class="auth-submit"
           :loading="loading"
+          :disabled="registrationClosed"
           native-type="submit"
         >
           注册

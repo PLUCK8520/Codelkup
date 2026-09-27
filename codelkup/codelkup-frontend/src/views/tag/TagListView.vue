@@ -9,6 +9,7 @@
  */
 import { computed, onMounted, ref } from 'vue'
 import { tagApi } from '@/api/post'
+import { statsApi } from '@/api/stats'
 import type { TagVO } from '@/types/api'
 
 const TAG_LIMIT = 50
@@ -18,6 +19,16 @@ const loading = ref(true)
 const error = ref('')
 
 /**
+ * 标签总数（来自 /api/stats 的服务端聚合）。
+ *
+ * 为什么需要它：热门榜上限 50，列表长度不是全量 —— 没有总数时文案只能说
+ * "引用最多的 N 个标签"（诚实但含糊）。拿到总数后可以像搜索页那样直说
+ * "共 X 个标签"，被上限截断时再明说"列出前 N 个"。
+ * 拿不到（null）时退回旧文案：它是锦上添花，不该让整页失败。
+ */
+const tagTotal = ref<number | null>(null)
+
+/**
  * 计数行文案。
  * ⚠️ 失败时**不显示数字**：请求失败时 tags 是空数组，直接插值会渲染成
  *    「引用最多的 0 个标签」—— 那是把"没拿到"说成了"没有"。
@@ -25,7 +36,14 @@ const error = ref('')
 const countText = computed(() => {
   if (loading.value) return '加载中…'
   if (error.value) return '标签列表暂时没取到'
-  return `引用最多的 ${tags.value.length} 个标签 · 点进去看同标签下的讨论`
+  // 总数没拿到：退回旧文案（诚实但不精确）
+  if (tagTotal.value === null) {
+    return `引用最多的 ${tags.value.length} 个标签 · 点进去看同标签下的讨论`
+  }
+  // 总数拿到了：被上限截断时明说"前 N 个"，否则直报总数（与搜索页"共 9 个标签"同口径）
+  const shown = tags.value.length
+  const capped = tagTotal.value > shown ? ` · 按引用次数列出前 ${shown} 个` : ''
+  return `共 ${tagTotal.value} 个标签${capped} · 点进去看同标签下的讨论`
 })
 
 async function load() {
@@ -41,6 +59,15 @@ async function load() {
   } finally {
     loading.value = false
   }
+
+  // 总数单独拉：它是文案的锦上添花（拿不到就退回"引用最多的 N 个"），
+  // 不能因为一个辅助数字失败而让整个标签列表进错误态
+  statsApi
+    .overview()
+    .then((s) => {
+      tagTotal.value = s.tagCount
+    })
+    .catch(() => {})
 }
 
 onMounted(load)

@@ -2,8 +2,9 @@
 /**
  * 问答专区 —— 把「提问闭环」从首页的一个 tab 提升为一级入口。
  *
- * 后端在 M2-14 就已经把 `type=1`（提问）与 `solved` 筛选做完了，所以本页
- * **零后端改动**：三个 tab 全部翻译成 `/api/posts` 的查询参数。
+ * 后端在 M2-14 就已经把 `type=1`（提问）与 `solved` 筛选做完了，三个 tab
+ * 全部翻译成 `/api/posts` 的查询参数；全站计数后来收敛到 `/api/stats`
+ * 服务端聚合（见下方 stats 的说明）。
  *
  * tab 与页码都放 URL（`?tab=unsolved&page=2`）：可分享、可刷新、前进后退正常。
  * 与首页同一约定 —— 切 tab / 翻页只改 URL，由 watcher 统一触发加载，
@@ -13,11 +14,12 @@ import { computed, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import { postApi } from '@/api/post'
+import { statsApi } from '@/api/stats'
 import { useAuthStore } from '@/stores/auth'
 import PostCard from '@/components/PostCard.vue'
 import PostListSkeleton from '@/components/PostListSkeleton.vue'
 import EmptyState from '@/components/EmptyState.vue'
-import type { PostListVO, PostQueryRequest } from '@/types/api'
+import type { PostListVO, PostQueryRequest, SiteStatsVO } from '@/types/api'
 
 type TabValue = 'unsolved' | 'latest' | 'solved'
 
@@ -43,8 +45,15 @@ const page = ref(1)
 const size = 20
 const loading = ref(true)
 const error = ref('')
-/** 两个口径的总数：tab 只回答"我在看什么"，数字才回答"还剩多少没解决" */
-const stats = ref({ unsolved: 0, solved: 0 })
+/**
+ * 全站提问计数（总数 / 待解决 / 已解决）—— 来自 /api/stats 的服务端聚合。
+ *
+ * ⚠️ 不能用本页列表的 total 当"共 N 个提问"：total 随 tab 变化（"待解决" tab 下
+ *    它只是待解决数），同一行会渲染出「共 3 个提问 · 待解决 3 · 已解决 10」
+ *    这种自相矛盾的数字。聚合接口口径恒定，三个数永远满足 N = A + B。
+ * ⚠️ 失败时为 null：计数行整行不显示数字（见 statsText），而不是把"没拿到"说成 0。
+ */
+const stats = ref<SiteStatsVO | null>(null)
 
 /**
  * 计数行文案。
@@ -54,8 +63,8 @@ const stats = ref({ unsolved: 0, solved: 0 })
  */
 const statsText = computed(() => {
   if (loading.value) return '加载中…'
-  if (error.value) return '问题数据暂时没取到'
-  return `共 ${total.value} 个提问 · 待解决 ${stats.value.unsolved} · 已解决 ${stats.value.solved}`
+  if (error.value || !stats.value) return '问题数据暂时没取到'
+  return `共 ${stats.value.questionCount} 个提问 · 待解决 ${stats.value.questionUnsolvedCount} · 已解决 ${stats.value.questionSolvedCount}`
 })
 
 /** tab → 查询参数。`solved` 只在提问帖上有意义，所以每次都带着 type=1 */
@@ -70,17 +79,16 @@ async function load() {
   loading.value = true
   error.value = ''
   try {
-    // 计数与列表一起发：别人采纳了答案之后再回到本页，数字必须是新的
-    // （把计数缓存在内存里会骗人）。size=1 只是为了拿 total，不取列表内容。
-    const [list, unsolved, solved] = await Promise.all([
+    // 列表 + 全站计数（服务端聚合）：计数不再是"本页 total 的分身"，
+    // 也不再需要两个 size=1 的探针请求 —— 3 个请求收敛成 2 个。
+    const [list, siteStats] = await Promise.all([
       postApi.list(buildQuery(tab.value, page.value)),
-      postApi.list({ type: 1, solved: false, page: 1, size: 1 }),
-      postApi.list({ type: 1, solved: true, page: 1, size: 1 }),
+      statsApi.overview(),
     ])
     posts.value = list.records
     total.value = list.total
     pages.value = list.pages
-    stats.value = { unsolved: unsolved.total, solved: solved.total }
+    stats.value = siteStats
   } catch (e) {
     error.value = e instanceof Error ? e.message : '加载失败'
     posts.value = []

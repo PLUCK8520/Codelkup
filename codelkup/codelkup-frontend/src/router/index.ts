@@ -94,6 +94,26 @@ const routes: RouteRecordRaw[] = [
     meta: { title: '个人主页' },
   },
   {
+    // 关注 / 粉丝列表：两条路由共用一个组件，tab 由路由名决定（可分享、可前进后退）
+    path: '/users/:id(\\d+)/followers',
+    name: 'user-followers',
+    component: () => import('@/views/user/UserConnectionsView.vue'),
+    meta: { title: '粉丝' },
+  },
+  {
+    path: '/users/:id(\\d+)/followees',
+    name: 'user-followees',
+    component: () => import('@/views/user/UserConnectionsView.vue'),
+    meta: { title: '关注' },
+  },
+  {
+    // 声望榜（公开接口，游客可见）
+    path: '/ranking',
+    name: 'ranking',
+    component: () => import('@/views/user/RankingView.vue'),
+    meta: { title: '排行榜' },
+  },
+  {
     path: '/settings',
     name: 'settings',
     component: () => import('@/views/user/SettingsView.vue'),
@@ -105,6 +125,14 @@ const routes: RouteRecordRaw[] = [
     name: 'my-collections',
     component: () => import('@/views/me/CollectionsView.vue'),
     meta: { title: '我的收藏', requiresAuth: true },
+  },
+  {
+    // 草稿箱：服务端草稿（登录后编辑器自动推送的跨设备副本）。
+    // 只列云端那份 —— 本地草稿是编辑器内部的写前日志，不在这里重复展示
+    path: '/me/drafts',
+    name: 'my-drafts',
+    component: () => import('@/views/me/DraftsView.vue'),
+    meta: { title: '我的草稿', requiresAuth: true },
   },
   {
     // 管理端：置顶/加精与计数重建。守卫是双重的 —— 前端 requiresAdmin 只负责体验，

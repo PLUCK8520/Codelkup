@@ -53,7 +53,7 @@ const NICKNAME_MAX = 20
 const BIO_MAX = 200
 const TAGS_MAX = 100
 
-/** 头像限制与后端 FileStorageService 一致：2MB，jpg/jpeg/png/webp */
+/** 头像限制与后端 ImageStorageService 一致：2MB，jpg/jpeg/png/webp */
 const AVATAR_MAX_SIZE = 2 * 1024 * 1024
 const AVATAR_ACCEPT = ['image/jpeg', 'image/png', 'image/webp']
 

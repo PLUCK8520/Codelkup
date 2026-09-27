@@ -11,6 +11,7 @@ import { ElMessage, ElMessageBox } from 'element-plus'
 import { commentApi } from '@/api/interaction'
 import { useAuthStore } from '@/stores/auth'
 import UserAvatar from '@/components/UserAvatar.vue'
+import ReportDialog from '@/components/ReportDialog.vue'
 import { formatRelativeTime, formatDateTime, formatCount } from '@/utils/format'
 import type { CommentVO } from '@/types/api'
 
@@ -41,6 +42,19 @@ const liked = ref(props.comment.liked === true)
 
 const isPostAuthor = computed(() => props.comment.authorId === props.postAuthorId)
 const isAccepted = computed(() => props.comment.isAccepted === 1)
+
+/* ==================== 举报（V0.5 / M5） ====================
+   根评论与回复共用一个弹窗实例：举报目标用 reportTargetId 记录，
+   点哪一条的"举报"就把哪一条的 ID 填进去。
+   可见性：登录 + 不是自己的内容 —— 自己的评论下面显示"举报"没有意义
+   （后端也会以 40001 拒绝自举报，前端只是不把这个错误摆到用户面前）。 */
+const reportVisible = ref(false)
+const reportTargetId = ref<number>()
+
+function openReport(commentId: number) {
+  reportTargetId.value = commentId
+  reportVisible.value = true
+}
 
 /**
  * 点赞：乐观更新 + 失败回滚。
@@ -144,7 +158,9 @@ async function onDelete() {
 
       <!-- 操作条 -->
       <footer class="c-actions">
+        <!-- 自赞拦截（L-1）：自己的评论不显示点赞按钮（后端同样硬拦 40001） -->
         <button
+          v-if="comment.authorId !== auth.user?.id"
           type="button"
           class="c-act"
           :class="{ 'is-active': liked }"
@@ -169,6 +185,16 @@ async function onDelete() {
           :title="comment.canDelete ? '删除评论' : '只能删除自己的评论'"
         >
           删除
+        </button>
+
+        <button
+          v-if="auth.isLoggedIn && comment.authorId !== auth.user?.id"
+          type="button"
+          class="c-act"
+          title="举报这条评论"
+          @click="openReport(comment.id)"
+        >
+          举报
         </button>
 
         <button
@@ -231,11 +257,28 @@ async function onDelete() {
 
             <footer class="c-actions">
               <button type="button" class="c-act" @click="emit('reply', reply)">回复</button>
+              <button
+                v-if="auth.isLoggedIn && reply.authorId !== auth.user?.id"
+                type="button"
+                class="c-act"
+                title="举报这条回复"
+                @click="openReport(reply.id)"
+              >
+                举报
+              </button>
             </footer>
           </div>
         </div>
       </div>
     </div>
+
+    <!-- 举报弹窗：根评论与回复共用（target 由 openReport 决定） -->
+    <ReportDialog
+      v-model:visible="reportVisible"
+      :target-type="2"
+      :target-id="reportTargetId ?? 0"
+      target-label="这条评论"
+    />
   </article>
 </template>
 

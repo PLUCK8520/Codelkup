@@ -197,8 +197,12 @@ DOMPurify.addHook('afterSanitizeAttributes', (node) => {
     }
   }
 
-  /* --- 2. 外链安全属性：防 tabnabbing --- */
+  /* --- 2. 外链安全属性：先统一清掉 target，再只为真正的外链补上 ---
+     非 http(s) 链接（mailto: / #锚点 / 站内相对路径）保留 target 没有意义
+     （浏览器只对可导航的外链生效），而 Markdown 内嵌 HTML 可以自带 target，
+     统一"先清后补"杜绝残留（安全审计 informational 项）。 */
   if (tag === 'A') {
+    node.removeAttribute('target')
     const href = node.getAttribute('href') || ''
     if (/^https?:\/\//i.test(href)) {
       node.setAttribute('target', '_blank')

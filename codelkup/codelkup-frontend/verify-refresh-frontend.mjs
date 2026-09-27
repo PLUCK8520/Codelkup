@@ -6,6 +6,12 @@
  * `status === 401`，链路**从不触发** —— 编译通过、页面能跑，都证明不了它有效；
  * 一旦失效，表现为"token 一过期就被当成未登录"，而刷新串行化的设计等于没生效。
  *
+ * M4-15 追加用例 5：`silent` 请求（草稿自动保存等后台行为）失败时**不弹全局提示**。
+ * 这条同样是"看代码能懂、但必须实测"的行为 —— 提示挂在两个分支里
+ * （业务码分支在 request()、HTTP 错误分支在响应拦截器），漏掉任何一处都会
+ * 让自动保存每 15 秒弹一次"保存失败"，而单测/构建都无法发现。
+ * 对照手法：同一个失败接口，非 silent 请求必须弹（证明探针有效）、silent 请求必须不弹。
+ *
  * 契约来源：mock 后端复刻的是真后端行为（该契约已由后端 verify-sprint1.py 对真服务验证）：
  *   - GET  /api/users/me      ：token 不是最新的那个 → 200 + code 40101
  *   - POST /api/auth/refresh  ：refreshToken 有效 → 200 + 新 token 对；无效 → 200 + code 40102
@@ -66,6 +72,13 @@ const backend = createHttpServer((req, res) => {
     return
   }
 
+  if (req.url.startsWith('/api/boom')) {
+    // HTTP 层错误（走 axios 失败分支）：用来验证 silent 标志在这一支也生效
+    res.writeHead(500, { 'Content-Type': 'application/json' })
+    res.end(JSON.stringify({ code: 50001, message: '服务器开小差了，请稍后再试', data: null }))
+    return
+  }
+
   if (req.url.startsWith('/api/users/me')) {
     // 只有拿到刷新后的新 token 才算通过
     if (auth === 'Bearer ' + NEW_ACCESS) {
@@ -81,11 +94,20 @@ await new Promise((r) => backend.listen(PORT, '127.0.0.1', r))
 
 /* ============ 桩：element-plus / axios（打 baseURL） ============ */
 // ⚠️ 桩文件写系统临时目录，不落到项目里 —— 否则中途异常退出会留下 .tmp-* 残骸
+// 提示桩把调用记到 globalThis（与脚本同一个 JS realm），用例 5 据此断言"弹了 / 没弹"
 const STUB_EP = join(tmpdir(), 'codelkup-stub-element-plus.mjs')
 const STUB_AX = join(tmpdir(), 'codelkup-stub-axios.mjs')
 // 桩在临时目录里，引用项目的 axios 必须用绝对 file:// URL（相对路径会解析到临时目录）
 const AXIOS_ENTRY = pathToFileURL(resolve('node_modules/axios/index.js')).href
-writeFileSync(STUB_EP, `export const ElMessage = { error() {}, success() {}, warning() {} }\nexport default { ElMessage }\n`)
+writeFileSync(
+  STUB_EP,
+  `export const ElMessage = {\n` +
+    `  error(m) { (globalThis.__elMsgs ||= []).push(m) },\n` +
+    `  success() {},\n` +
+    `  warning() {},\n` +
+    `}\n` +
+    `export default { ElMessage }\n`,
+)
 writeFileSync(
   STUB_AX,
   `import axios from ${JSON.stringify(AXIOS_ENTRY)}\n` +
@@ -165,6 +187,46 @@ check('refreshToken 失效 → 本地凭证被清空', !kv.get('codelkup_access_
 check('登录态失效 → 跳转登录页并带回跳地址',
   redirects.length > beforeRedirects && redirects[redirects.length - 1].includes('/login?redirect='),
   redirects[redirects.length - 1])
+
+/* ============ 用例 5：silent 请求失败不弹全局提示（草稿自动保存的失败降级）============ */
+globalThis.__elMsgs = []
+kv.clear() // 游客态即可：本组用例只看提示弹没弹
+
+// 对照组：同一个"业务码失败"的接口，非 silent 请求**必须**弹 —— 证明探针真的有效
+let err5 = null
+try {
+  await mod.get('/not-exist')
+} catch (e) {
+  err5 = e
+}
+check('对照：非 silent 业务失败会弹全局提示', globalThis.__elMsgs.length === 1, JSON.stringify(globalThis.__elMsgs))
+check('对照：业务失败仍按业务码抛出（提示不影响错误传播）', err5 && err5.code === 40001, err5 && err5.code)
+
+const before5 = globalThis.__elMsgs.length
+try {
+  await mod.request({ method: 'GET', url: '/not-exist', silent: true })
+} catch {
+  /* 预期抛错 */
+}
+check('silent 业务失败（HTTP 200 + 40001）不弹提示', globalThis.__elMsgs.length === before5,
+  JSON.stringify(globalThis.__elMsgs.slice(before5)))
+
+try {
+  await mod.request({ method: 'GET', url: '/boom', silent: true })
+} catch {
+  /* 预期抛错 */
+}
+check('silent HTTP 500 失败同样不弹提示（拦截器分支也认这个标志）',
+  globalThis.__elMsgs.length === before5, JSON.stringify(globalThis.__elMsgs.slice(before5)))
+
+// 对照组：同一条 /boom 换成非 silent，提示要出现 —— 否则上一条可能是"接口根本没报错"
+try {
+  await mod.get('/boom')
+} catch {
+  /* 预期抛错 */
+}
+check('对照：非 silent 的 HTTP 500 会弹提示', globalThis.__elMsgs.length === before5 + 1,
+  JSON.stringify(globalThis.__elMsgs.slice(before5)))
 
 /* ============ 收尾 ============ */
 await vite.close()

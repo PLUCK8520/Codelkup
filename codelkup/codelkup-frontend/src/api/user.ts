@@ -6,6 +6,7 @@ import type {
   PasswordChangeRequest,
   PostListVO,
   ProfileUpdateRequest,
+  RankingUserVO,
   RegisterRequest,
   TokenResponse,
   UserVO,
@@ -28,6 +29,14 @@ export const authApi = {
 export const userApi = {
   /** 公开主页（不含邮箱） */
   getProfile: (id: number) => get<UserVO>(`/users/${id}`),
+
+  /**
+   * 声望榜（公开接口，无需登录）。
+   *
+   * ⚠️ 路径是 `/users/ranking`，看起来会被 `/users/{id}` 吞掉 —— 不会：
+   *    Spring 按"字面量优先于路径变量"匹配，`/ranking` 胜出（`/users/me` 同理）。
+   */
+  ranking: (limit = 20) => get<RankingUserVO[]>('/users/ranking', { limit }),
 
   /** 本人资料（含邮箱） */
   getMe: () => get<CurrentUserVO>('/users/me'),
