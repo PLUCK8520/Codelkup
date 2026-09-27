@@ -15,6 +15,7 @@ Sprint 4 端到端验收脚本（检索与发现）。
 """
 import json
 import os
+import io
 import subprocess
 import sys
 import time
@@ -27,7 +28,25 @@ JAR_DIR = r"C:\Users\32519\Desktop\Codelkup\codelkup\codelkup-backend"
 JAR = os.path.join(JAR_DIR, "target", "codelkup-backend-0.0.1-SNAPSHOT.jar")
 MYSQL = r"D:\MySQL\MySQL Server 8.0\bin\mysql.exe"
 DB = "codelkup"
-DB_ARGS = ["-h127.0.0.1", "-ucodelkup", "-pchange-me-dev-password", DB, "-N", "-B"]
+# dev 库口令**不入库**（本机开发凭据）：优先 DEV_DB_PASSWORD 环境变量，其次读仓库根 .env 的 DB_PASSWORD。
+# 说明：验收脚本要直连本机 MySQL 做"接口值 ↔ 库真值"对账，口令不能写死在仓库里。
+def _dev_pw() -> str:
+    pw = os.environ.get("DEV_DB_PASSWORD")
+    if pw:
+        return pw
+    env_path = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))), ".env")
+    try:
+        with io.open(env_path, encoding="utf-8") as f:
+            for line in f:
+                if line.startswith("DB_PASSWORD="):
+                    return line.split("=", 1)[1].strip()
+    except OSError:
+        pass
+    print("✗ 未找到本机 dev 库口令：设 DEV_DB_PASSWORD 环境变量，或在仓库根 .env 里写 DB_PASSWORD=...")
+    sys.exit(1)
+
+
+DB_ARGS = ["-h127.0.0.1", "-ucodelkup", "-p" + _dev_pw(), DB, "-N", "-B"]
 
 _opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
 results = []

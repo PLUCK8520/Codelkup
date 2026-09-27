@@ -618,4 +618,4 @@ flowchart TD
      分组顺序按"文档 → 后端 → 前端 → 验收 → 部署 → CI"，每组都能独立读懂、独立回滚。
    - **推送前置（发现两处阻塞）**：**仓库没有配置 remote**（`git remote -v` 为空）且本机**未安装 `gh`** —— 因此"推送 → CI 绿灯"这一步需要先有 GitHub 空仓库地址（用户侧动作）；拿到后一条命令即可：`git remote add origin <url> && git push -u origin master`（也可先把分支改为 `main` 以符合 GitHub 默认）。
    - **提交前自查（已做）**：`git status` 未出现 `.env` / `deploy/.env*` / `backups/` / `target/` / `node_modules/` / `uploads/`；`git grep` 确认 **dev JWT 密钥不在任何被跟踪文件里**（`.env` 未入库，只入库 `application-dev.yml.example`）。
-   - **一处如实记录（待你决策，不阻断）**：`change-me-dev-password`（**本机 dev 库口令**）出现在 4 个验收脚本里（直连本机 MySQL 做对账），且**由初始化提交 `a5580eb` 就带入**、非本轮新增。它是"只在本机有意义的开发凭据"（生产用 `.env` 注入的强随机值），清洗它需要**改写历史**（rebase/filter-repo）。建议：**保留 + 在文档注明口径**（dev 凭据仅用于本地开发）比改写历史更划算；若你要"零 dev 凭据入库"，我可以在首推前做一次历史清洗。
+   - **dev 库口令清洗（用户拍板：零 dev 凭据入库）**：8 个验收脚本（sprint2/3/4、v03-ai/metrics/reputation、v04-stats、v05-reports）原先用 `-u<user> -p<dev 口令>` 直连本机 MySQL 做"接口值 ↔ 库真值"对账，口令字面量**由初始化提交就带入**。处置：脚本改为**从 `DEV_DB_PASSWORD` 环境变量取，其次读仓库根 `.env`（已 gitignore）的 `DB_PASSWORD`**，取不到则给可读提示并退出；随后**改写历史**抹掉所有旧提交里的字面量（细节见备注 53）。
