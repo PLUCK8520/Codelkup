@@ -448,6 +448,109 @@ def main():
         check("S2.5 公开主页仍不含 email",
               "email" not in json.dumps(b["data"], ensure_ascii=False), "干净")
 
+        # ==================== S2.6 服务端草稿箱（V0.4 / M4-15） ====================
+        # 与前端 useDraft 的 scope 命名严格同源：new=新建稿，edit:<postId>=编辑稿
+        st, b = call("GET", "/api/drafts")
+        check("S2.6 未登录读草稿箱被拒 (40101)", b.get("code") == 40101, b.get("code"))
+        st, b = call("PUT", "/api/drafts", {"scope": "new", "title": "游客草稿", "content": "这段不该存进来"})
+        check("S2.6 未登录保存草稿被拒 (40101)", b.get("code") == 40101, b.get("code"))
+
+        st, b = call("PUT", "/api/drafts", {
+            "scope": "new", "title": "草稿冒烟", "content": "# 背景\n\n**粗体**与`行内代码`的正文。",
+            "boardId": board_id, "type": 1, "tags": ["Java", "草稿"]
+        }, token=token_a)
+        draft_ok = b.get("code") == 0
+        check("S2.6 保存新建稿成功", draft_ok, b.get("code"))
+        check("S2.6 保存回执含 scope 与正文原文",
+              draft_ok and b["data"]["scope"] == "new" and "粗体" in b["data"]["content"],
+              b.get("data") if draft_ok else None)
+        check("S2.6 标签按列表返回（JSON 存储还原）",
+              draft_ok and b["data"]["tags"] == ["Java", "草稿"],
+              b["data"].get("tags") if draft_ok else None)
+        # 回执时间与库内 update_time 同源对账（同秒；防"回执时间≠落库时间"）
+        db_ms = db_scalar("SELECT UNIX_TIMESTAMP(update_time) * 1000 FROM t_draft "
+                          "WHERE user_id=%d AND scope='new'" % uid_a)
+        check("S2.6 回执时间与库内 update_time 同刻",
+              draft_ok and db_ms is not None and abs(b["data"]["updateTimeEpoch"] - db_ms) < 1000,
+              "回执=%s 库内=%s" % (b["data"]["updateTimeEpoch"] if draft_ok else None, db_ms))
+
+        st, b = call("GET", "/api/drafts", token=token_a)
+        rows = b.get("data") or []
+        check("S2.6 草稿箱列表的预览已剥离 Markdown 语法",
+              len(rows) == 1 and rows[0]["excerpt"] and "#" not in rows[0]["excerpt"]
+              and "*" not in rows[0]["excerpt"] and "粗体" in rows[0]["excerpt"],
+              rows[0].get("excerpt") if rows else None)
+        check("S2.6 列表项不含正文（只传摘要）",
+              all("content" not in r for r in rows), list(rows[0].keys()) if rows else None)
+
+        # 覆盖保存：同一 scope 仍然只有一行（唯一键生效）
+        # ⚠️ t_draft.update_time 是秒精度，间隔 1.1 秒才能让"更新"与倒序可验证
+        time.sleep(1.1)
+        st, b = call("PUT", "/api/drafts", {
+            "scope": "new", "title": "草稿冒烟（改）", "content": "改过一次的正文。", "boardId": board_id,
+            "type": 0, "tags": []
+        }, token=token_a)
+        check("S2.6 覆盖保存成功", b.get("code") == 0, b.get("code"))
+        cnt = db_scalar("SELECT COUNT(*) FROM t_draft WHERE user_id=%d AND scope='new'" % uid_a)
+        check("S2.6 同 scope 覆盖：库内仍只有 1 行", cnt == 1, "行数=%s" % cnt)
+        check("S2.6 覆盖后标题与标签均为最新值",
+              b["data"]["title"] == "草稿冒烟（改）" and b["data"]["tags"] == [],
+              (b["data"].get("title"), b["data"].get("tags")))
+
+        # 编辑稿 scope：路径参数里带冒号（edit:123），验证能按路径参数读取
+        time.sleep(1.1)
+        st, b = call("PUT", "/api/drafts", {
+            "scope": "edit:%d" % pid, "title": "编辑稿标题", "content": "编辑稿正文。", "boardId": board_id
+        }, token=token_a)
+        check("S2.6 编辑稿（edit:<postId>）保存成功", b.get("code") == 0, b.get("code"))
+        st, b = call("GET", "/api/drafts/edit:%d" % pid, token=token_a)
+        check("S2.6 带冒号的 edit scope 可按路径参数读取",
+              b.get("code") == 0 and b.get("data", {}).get("scope") == "edit:%d" % pid,
+              b.get("data", {}).get("scope") if isinstance(b.get("data"), dict) else b.get("data"))
+
+        st, b = call("GET", "/api/drafts", token=token_a)
+        rows = b.get("data") or []
+        check("S2.6 草稿箱按更新时间倒序（后保存的编辑稿在前）",
+              [r["scope"] for r in rows] == ["edit:%d" % pid, "new"],
+              [r["scope"] for r in rows])
+
+        # 没有草稿 / 非法 scope
+        st, b = call("GET", "/api/drafts/edit:999999", token=token_a)
+        check("S2.6 没有草稿时读单条返回 data=null（不是 404）",
+              b.get("code") == 0 and b.get("data") is None, b.get("data"))
+        st, b = call("GET", "/api/drafts/abc", token=token_a)
+        check("S2.6 非法 scope 读取被拒 (40001)", b.get("code") == 40001, b.get("message"))
+        st, b = call("PUT", "/api/drafts", {"scope": "../../etc/passwd", "content": "路径穿越尝试"}, token=token_a)
+        check("S2.6 非法 scope 保存被拒 (40001)", b.get("code") == 40001, b.get("message"))
+
+        # 长度上限与发帖对齐
+        st, b = call("PUT", "/api/drafts", {"scope": "new", "title": "x" * 121, "content": "超长标题"}, token=token_a)
+        check("S2.6 标题超 120 字被拒 (40001)", b.get("code") == 40001, b.get("code"))
+        st, b = call("PUT", "/api/drafts", {"scope": "new", "content": "x" * 50001}, token=token_a)
+        check("S2.6 正文超 50000 字被拒 (40001)", b.get("code") == 40001, b.get("code"))
+        st, b = call("PUT", "/api/drafts", {"scope": "new", "content": "ok", "tags": ["a1", "a2", "a3", "a4", "a5", "a6"]}, token=token_a)
+        check("S2.6 标签超 5 个被拒 (40001)", b.get("code") == 40001, b.get("code"))
+
+        # 横向隔离：草稿只对本人可见/可删
+        st, b = call("GET", "/api/drafts/new", token=token_b)
+        check("S2.6 他人读同一 scope 拿到 null", b.get("code") == 0 and b.get("data") is None, b.get("data"))
+        st, b = call("GET", "/api/drafts", token=token_b)
+        check("S2.6 他人草稿箱为空", (b.get("data") or []) == [], len(b.get("data") or []))
+        st, b = call("DELETE", "/api/drafts/new", token=token_b)
+        cnt = db_scalar("SELECT COUNT(*) FROM t_draft WHERE user_id=%d AND scope='new'" % uid_a)
+        check("S2.6 他人删除不影响本人草稿（水平越权无效）", b.get("code") == 0 and cnt == 1, "行数=%s" % cnt)
+
+        # 删除：正常 + 幂等 + 落库对账
+        st, b = call("DELETE", "/api/drafts/edit:%d" % pid, token=token_a)
+        check("S2.6 删除草稿成功", b.get("code") == 0, b.get("code"))
+        st, b = call("DELETE", "/api/drafts/edit:%d" % pid, token=token_a)
+        check("S2.6 重复删除幂等（不报错）", b.get("code") == 0, b.get("code"))
+        st, b = call("GET", "/api/drafts/edit:%d" % pid, token=token_a)
+        check("S2.6 删除后读回 null", b.get("code") == 0 and b.get("data") is None, b.get("data"))
+        st, b = call("DELETE", "/api/drafts/new", token=token_a)
+        cnt = db_scalar("SELECT COUNT(*) FROM t_draft WHERE user_id=%d" % uid_a)
+        check("S2.6 删除 new 稿后草稿箱清空（库内 0 行）", b.get("code") == 0 and cnt == 0, "行数=%s" % cnt)
+
         # ==================== 删除收尾 ====================
         st, b = call("DELETE", "/api/posts/%d" % pid, token=token_a)
         check("S2.2 作者删除自己的帖子成功", b.get("code") == 0, b.get("code"))

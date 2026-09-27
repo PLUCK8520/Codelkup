@@ -7,7 +7,8 @@ V0.3 P0 安全验收 —— 现场验证三条 low 是否真的关闭。
   1. /api/auth/check-email 的防枚举限流仍生效（第 31 次被限流）
   2. /api/auth/register 也按 IP 限流（第 6 次被限流）—— 修掉"绕道注册接口枚举"
   3. 登录失败按纯 IP 维度累计（同 IP 换邮箱打到第 31 次被拒）—— 修掉"分片喷洒"
-  4. 伪造 X-Forwarded-For 不会产生新的计数键（回归上一轮的修复）
+  4. 伪造 X-Forwarded-For 的语义：本机直连（= 可信代理）会被采信，而**生产侧的不可伪造**
+     由 nginx 用 $remote_addr 覆盖该头保证（已在 compose 栈实测，见 TASKS 备注 31）
 
 设计取舍：
   - **只走 HTTP + 原生 socket**，不依赖 requests / redis 客户端 —— 服务器与 CI 上都能直接跑
@@ -88,21 +89,44 @@ def call(method: str, path: str, body: dict | None = None,
 # ==================== Redis（RESP over socket，零依赖）====================
 
 def redis_cmd(*args: str) -> list[str]:
-    """发一条命令，返回按行切分的响应（够用即可，不做完整 RESP 解析）"""
+    """发一条命令，把 RESP 回复解析成"元素列表"。
+
+    ⚠️ 为什么不能"读到不满 64KB 就认为读完了"（本脚本第一版就是这么写的）：
+    `KEYS *` 在 dev Redis（700+ 键）上的回复会被 TCP 切成多段，中间某一段
+    完全可能小于 64KB —— 那时循环提前收手，**后面的键全丢**。表现不是报错，
+    而是"明明存在的键，断言查不到"，也就是一次**假绿**。
+    M3-10 实测踩到：伪造 XFF 的计数键确实建了出来（后端日志 `ip=203.0.113.99`、
+    按前缀查得到），而 [4] 用 `KEYS *` 查却什么都看不见。
+
+    正确做法是按 RESP 的**自描述长度**读完：数组头 `*N` 之后逐个读 `$len` 载荷。
+    """
+    def read_line(f) -> str:
+        return f.readline().decode("utf-8", "replace").rstrip("\r\n")
+
     payload = f"*{len(args)}\r\n" + "".join(
         f"${len(a.encode())}\r\n{a}\r\n" for a in args)
-    with socket.create_connection((REDIS_HOST, REDIS_PORT), timeout=3) as s:
+    with socket.create_connection((REDIS_HOST, REDIS_PORT), timeout=5) as s:
         s.sendall(payload.encode())
-        chunks = []
-        while True:
-            buf = s.recv(65536)
-            if not buf:
-                break
-            chunks.append(buf)
-            # KEYS 的多行响应长度不定，这里按"读到不再有数据"判断
-            if len(buf) < 65536:
-                break
-    return b"".join(chunks).decode(errors="replace").split("\r\n")
+        f = s.makefile("rb")
+        head = read_line(f)
+        if head.startswith("*"):
+            items = []
+            for _ in range(int(head[1:])):
+                mark = read_line(f)
+                if mark.startswith("$"):
+                    size = int(mark[1:])
+                    body = f.read(size).decode("utf-8", "replace")
+                    f.read(2)          # 跳过尾随 CRLF
+                    items.append(body)
+                else:                  # 数组里也可能是整数（本脚本用不到，按原样收下）
+                    items.append(mark)
+            return items
+        if head.startswith("$"):
+            size = int(head[1:])
+            body = f.read(size).decode("utf-8", "replace")
+            f.read(2)
+            return [body]
+        return [head[1:] if head[:1] in "+-:" else head]
 
 
 def keys(pattern: str) -> list[str]:
@@ -173,14 +197,94 @@ def case_login_spray_limit() -> None:
     check("Redis 中存在纯 IP 维度计数键", len(ip_keys) >= 1, f"keys={ip_keys}")
 
 
-def case_forged_xff_ignored() -> None:
-    print("\n[4] 伪造 X-Forwarded-For 不产生新计数键（上一轮修复的回归）")
+def case_forged_xff_semantics() -> None:
+    print("\n[4] 伪造 X-Forwarded-For：本机直连（可信代理）会被采信，生产由 nginx 覆盖挡住")
     forged = "203.0.113.99"
+    email = f"xff-{int(time.time())}@example.com"
     call("POST", "/api/auth/login",
-         {"email": f"xff-{int(time.time())}@example.com", "password": "wrong-pass-1"},
+         {"email": email, "password": "wrong-pass-1"},
          headers={"X-Forwarded-For": forged})
-    leaked = [k for k in keys("*") if forged in k]
-    check("Redis 中没有任何以伪造 IP 为维度的键", not leaked, f"keys={leaked}")
+
+    # ⚠️ 这一节的"正确期望"在 M3-10 被**实测纠正**过，别按直觉改回去：
+    #    · 本机直连 8085：127.0.0.1 落在 remoteip.internal-proxies 里 ⇒ Tomcat 采信我们发的
+    #      XFF，计数落在**伪造 IP** 上。这不是缺陷 —— 阀的语义就是"可信代理转发的 XFF
+    #      才是真实客户端地址"，而本机正是那个可信代理（后端日志实测 `ip=203.0.113.99`）。
+    #    · 公网经 nginx：nginx 用 $remote_addr **覆盖**（而非追加）该头 ⇒ 后端看到的永远是真实来源。
+    #      compose 栈实测：带伪造 XFF 的登录失败，键是 `login_fail_ip:172.21.0.1`（真实来源），
+    #      Redis 里**没有**任何 203.0.113.99 的键。
+    #    所以"防爆破不可绕"这条生产口径成立；而本脚本跑在开发栈、直连后端，能钉住的是**阀语义**本身。
+    #    （旧版断言写的是"伪造不产生新计数键"，它之所以看着通过，是因为 KEYS * 的回复被读漏了
+    #      —— 见 redis_cmd 的注释，那是一次假绿。）
+    forged_keys = [k for k in keys("codelkup:auth:login_fail*") if forged in k]
+    check("本机直连时 XFF 被采信（阀语义：可信代理的 XFF 才是真实客户端）",
+          len(forged_keys) >= 1, f"伪造 IP 的键={forged_keys}")
+
+    misattributed = [k for k in keys("codelkup:auth:login_fail*")
+                     if f":{email}" in k and forged not in k]
+    check("该次失败只记在伪造 IP 维度（没有同时写进真实对端维度）",
+          not misattributed, f"异常键={misattributed}")
+
+
+def case_public_profile_role() -> None:
+    print("\n[5] 公开主页不暴露角色（L-2 修复：管理员不可被遍历枚举）")
+    # 本用例自己注册一个探测账号；先清注册桶，避免前面 register 限流用例占住的额度
+    try:
+        cleanup()
+    except OSError:
+        pass
+    email = f"role-probe-{int(time.time())}@example.com"
+    _, body = call("POST", "/api/auth/register",
+                   {"email": email, "password": "abc12345", "nickname": "角色探针"})
+    check("探测账号注册成功", body.get("code") == 0, body.get("code"))
+    if body.get("code") != 0:
+        return
+    uid = body["data"]["user"]["id"]
+    token = body["data"]["accessToken"]
+
+    _, guest_view = call("GET", f"/api/users/{uid}")
+    guest_data = guest_view.get("data") or {}
+    check("游客读公开主页：role 字段不存在（不是 null，是根本没有）",
+          guest_view.get("code") == 0 and "role" not in guest_data,
+          f"code={guest_view.get('code')} keys={sorted(guest_data.keys())[:12]}")
+
+    _, authed_view = call("GET", f"/api/users/{uid}",
+                          headers={"Authorization": "Bearer " + token})
+    authed_data = authed_view.get("data") or {}
+    check("登录后读公开主页：role 同样不存在（公开面口径不因登录而变）",
+          authed_view.get("code") == 0 and "role" not in authed_data,
+          f"keys={sorted(authed_data.keys())[:12]}")
+
+    _, me = call("GET", "/api/users/me", headers={"Authorization": "Bearer " + token})
+    me_data = me.get("data") or {}
+    check("本人的 /users/me 仍返回 role（前端管理入口依赖它，回归护栏）",
+          me.get("code") == 0 and isinstance(me_data.get("role"), int),
+          me_data.get("role"))
+
+
+def case_auth_hardening() -> None:
+    print("\n[6] 认证加固（审计 informational）：JWT 算法钉死 + refresh TTL 读配置")
+    try:
+        cleanup()
+    except OSError:
+        pass
+    email = f"harden-{int(time.time())}@example.com"
+    _, body = call("POST", "/api/auth/register",
+                   {"email": email, "password": "abc12345", "nickname": "加固探针"})
+    check("探测账号注册成功", body.get("code") == 0, body.get("code"))
+    if body.get("code") != 0:
+        return
+    uid = body["data"]["user"]["id"]
+    access = body["data"]["accessToken"]
+
+    import base64
+    header_b64 = access.split(".")[0]
+    header = json.loads(base64.urlsafe_b64decode(header_b64 + "=" * (-len(header_b64) % 4)))
+    check("JWT 算法显式钉死为 HS256（修复前随密钥长度自动漂移为 HS384）",
+          header.get("alg") == "HS256", header.get("alg"))
+
+    ttl = int(redis_cmd("TTL", f"codelkup:auth:refresh:{uid}")[0])
+    check("refresh 白名单 TTL 读配置（默认 7 天 = 604800s，允许 ±60s 边界）",
+          604740 <= ttl <= 604800, ttl)
 
 
 def main() -> int:
@@ -218,9 +322,11 @@ def main() -> int:
     case_check_email_limit()
     case_register_limit()
     case_login_spray_limit()
-    case_forged_xff_ignored()
+    case_forged_xff_semantics()
+    case_public_profile_role()
+    case_auth_hardening()
 
-    print("\n[5] 自清理（避免限流额度留给后续脚本）")
+    print("\n[7] 自清理（避免限流额度留给后续脚本）")
     try:
         deleted = cleanup()
         remain = (keys("codelkup:rate:register:*") + keys("codelkup:auth:login_fail_ip:*"))

@@ -224,9 +224,11 @@ def main():
         call("POST", "/api/posts/%d/like" % pid, token=token_b)
         st, b = call("POST", "/api/posts/%d/like" % pid, token=token_c)
         check("三人中两人点赞后计数为 2", b["data"]["count"] == 2, b["data"].get("count"))
-        call("POST", "/api/posts/%d/like" % pid, token=token_a)
+        # L-1 修复：作者自赞必须被拒（40001），且计数完全不受影响
+        st, b = call("POST", "/api/posts/%d/like" % pid, token=token_a)
+        check("作者自赞被拒 (40001)", b.get("code") == 40001, b.get("code"))
         st, b = call("GET", "/api/posts/%d" % pid, token=token_b)
-        check("详情页计数与操作返回值一致（=3）", b["data"]["likeCount"] == 3, b["data"].get("likeCount"))
+        check("详情页计数不受自赞影响（=2）", b["data"]["likeCount"] == 2, b["data"].get("likeCount"))
         check("已点赞者看详情 liked=true", b["data"]["liked"] is True, b["data"].get("liked"))
         st, b = call("GET", "/api/posts/%d" % pid, token=token_c)
         check("已点赞者（丙）liked=true", b["data"]["liked"] is True, b["data"].get("liked"))
@@ -250,7 +252,7 @@ def main():
         check("重复收藏幂等（计数仍为 1）", b["data"]["count"] == 1, b["data"].get("count"))
         # 收藏不影响点赞数
         st, b = call("GET", "/api/posts/%d" % pid, token=token_c)
-        check("收藏不污染点赞数（点赞仍为 3）", b["data"]["likeCount"] == 3, b["data"]["likeCount"])
+        check("收藏不污染点赞数（点赞仍为 2）", b["data"]["likeCount"] == 2, b["data"]["likeCount"])
         check("详情 collected=true", b["data"]["collected"] is True, b["data"].get("collected"))
 
         # ==================== S3 评论：发表 / 树形 / 计数 ====================
@@ -334,7 +336,7 @@ def main():
 
         # 评论点赞数与帖子点赞独立
         st, b = call("GET", "/api/posts/%d" % pid)
-        check("评论点赞不影响帖子点赞数（仍 3）", b["data"]["likeCount"] == 3, b["data"]["likeCount"])
+        check("评论点赞不影响帖子点赞数（仍 2）", b["data"]["likeCount"] == 2, b["data"]["likeCount"])
 
         # ==================== S3 删除评论 ====================
         # root2 的作者是「路人丙」(token_c)。
@@ -408,7 +410,7 @@ def main():
         rep = b.get("data") or {}
         check("重建报告含前后对照（beforeLike=999）",
               rep.get("beforeLike") == 999, rep.get("beforeLike"))
-        check("重建后 likeCount 修正为真值 3", rep.get("afterLike") == 3, rep.get("afterLike"))
+        check("重建后 likeCount 修正为真值 2", rep.get("afterLike") == 2, rep.get("afterLike"))
         check("重建后 collectCount 修正为真值 1", rep.get("afterCollect") == 1, rep.get("afterCollect"))
         # 评论真值由对账得出（删除评论后已变化），不硬编码，避免脚本随实现演进而脆弱
         check("重建后 commentCount 修正为明细表真值",

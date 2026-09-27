@@ -190,6 +190,48 @@ def main():
         st, b = call("GET", "/api/users/999999999")
         check("S1.5 不存在的用户 → 40401", b and b.get("code") == 40401, b)
 
+        # ==================== S1.6 声望榜（V0.4）====================
+        # 公开只读接口，游客可见（与 /api/users/{id} 同一类）。
+        # ⚠️ 本脚本没有数据库通道，所以这里全部用"接口对接口"对账：
+        #    榜单 ↔ 公开主页必须同源（昵称/等级/声望），名单的**单调性与名次连续性**
+        #    也能纯靠响应验证。写死"榜首必须是某人/某分"会随数据变化而红。
+        st, b = call("GET", "/api/users/ranking")
+        board = (b or {}).get("data") or []
+        check("S1.6 声望榜游客可读且非空", b and b.get("code") == 0 and len(board) > 0, len(board))
+        check("S1.6 名次从 1 起连续编号",
+              [x["rank"] for x in board] == list(range(1, len(board) + 1)),
+              [x["rank"] for x in board][:5])
+        check("S1.6 按声望倒序（单调不增）",
+              all(board[i]["reputation"] >= board[i + 1]["reputation"] for i in range(len(board) - 1)),
+              [x["reputation"] for x in board][:5])
+        check("S1.6 声望为 0 的账号不上榜（榜尾也不该出现 0）",
+              all(x["reputation"] > 0 for x in board), [x["reputation"] for x in board][-3:])
+        board_json = json.dumps(board, ensure_ascii=False).lower()
+        check("S1.6 榜单不含 email / password（与公开主页同一脱敏口径）",
+              "email" not in board_json and "password" not in board_json,
+              sorted(board[0].keys()) if board else None)
+
+        # 跨接口对账：榜首那条与它自己的公开主页必须给出同一个昵称/等级/声望
+        top = board[0]
+        st, b2 = call("GET", "/api/users/%d" % top["id"])
+        prof = (b2 or {}).get("data") or {}
+        check("S1.6 榜首条目与公开主页一致（昵称 / 等级 / 声望同源）",
+              prof.get("nickname") == top["nickname"]
+              and prof.get("reputation") == top["reputation"]
+              and prof.get("level") == top["level"],
+              (top["nickname"], top["reputation"], prof.get("reputation"), prof.get("level")))
+
+        # 参数边界：limit 是 @RequestParam，走的是"方法级参数校验"那套（40001）
+        # 与"类型转换失败"那套（40003）—— 两条路径都要在
+        st, b = call("GET", "/api/users/ranking?limit=3")
+        check("S1.6 limit 生效", b and b.get("code") == 0 and len(b["data"]) == 3, len(b.get("data") or []))
+        st, b = call("GET", "/api/users/ranking?limit=999")
+        check("S1.6 limit 超上限被拦下 (40001)", b and b.get("code") == 40001, b)
+        st, b = call("GET", "/api/users/ranking?limit=0")
+        check("S1.6 limit=0 被拦下 (40001)", b and b.get("code") == 40001, b)
+        st, b = call("GET", "/api/users/ranking?limit=abc")
+        check("S1.6 非法 limit 类型被拦下 (40003)", b and b.get("code") == 40003, b)
+
         # ==================== 刷新 / 登出 ====================
         # ⚠️ 注意：refreshToken 白名单是"单槽位"设计（一个用户只保留最新一个），
         #    上面任何一次成功登录都会顶掉旧值。所以这里必须重新登录拿一对"新鲜"的。

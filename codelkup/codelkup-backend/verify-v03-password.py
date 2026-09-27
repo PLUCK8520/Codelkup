@@ -6,6 +6,10 @@ V0.3 M2 验收 —— 修改密码（后端语义 + 凭证失效链）。
 对应 ALIGNMENT 的 S9 同批次完整性目标，覆盖 M2-6 的验收：
     改密成功 → 旧 refreshToken 失效（白名单被清）→ 旧 accessToken 被拉黑（401）
     且：原密码错拒绝、新旧相同拒绝、改密后必须用新密码才能登录。
+    M-1 修复（安全审计，2026-09-27）追加：原密码错 5 次 → 锁定 15 分钟（42902，与登录同一口径）；
+    锁定期间正确原密码也不放行；清除计数后恢复可用。
+    F1 修复（第二轮安全审计，2026-09-27）追加：refresh 轮换的单次消费语义 ——
+    第一枚换发成功、同一枚二次使用 40102（CAS 原子消费）、新换发的仍可继续轮换。
 
 设计原则：**只测"改完有没有真的锁住旧凭证"**，不测"接口返回 200" ——
 后者说明不了任何事，前者才是用户说"改密=把别人踢下线"时的真实预期。
@@ -89,6 +93,14 @@ def count_rate_buckets() -> int:
     return len([line for line in resp.split("\r\n") if line.startswith("codelkup:")])
 
 
+def redis_int(resp: str) -> int:
+    """解析 RESP 整数应答（":1\\r\\n" / ":-1\\r\\n"）—— 用于 EXISTS / TTL"""
+    try:
+        return int(resp.strip().lstrip(":").split("\r\n")[0])
+    except ValueError:
+        return -1
+
+
 def main() -> int:
     global BASE, REDIS_HOST, REDIS_PORT
     parser = argparse.ArgumentParser(description="V0.3 改密验收")
@@ -120,6 +132,7 @@ def main() -> int:
                {"email": email, "password": OLD_PWD, "nickname": "改密测试"})
     check("注册成功", reg.get("code") == 0, reg.get("code"))
     access, refresh = reg["data"]["accessToken"], reg["data"]["refreshToken"]
+    uid = reg["data"]["user"]["id"]
 
     me = call("GET", "/api/users/me", token=access)
     check("基线：旧 accessToken 可用", me.get("code") == 0, me.get("code"))
@@ -138,6 +151,14 @@ def main() -> int:
     check("弱密码（纯数字）被参数校验拦下（40001）", weak.get("code") == 40001, weak.get("code"))
 
     print("\n[3] 正式改密")
+    # 再登录一次，模拟"另一台设备"的会话：改密后它手里的 access 也必须失效（L-3 修复）
+    other_login = call("POST", "/api/auth/login", {"email": email, "password": OLD_PWD})
+    other_access = other_login["data"]["accessToken"] if other_login.get("code") == 0 else None
+    check("准备：另一台设备的 access 就绪", bool(other_access), other_login.get("code"))
+    # ⚠️ iat 是秒精度：必须跨过一秒，保证"他设备的 token"签发时刻**严格早于**撤销水位，
+    #    否则同秒边界会让下面的撤销断言偶发失败（与 verify-v03-score 的 1.1s 间隔同一手法）
+    time.sleep(1.1)
+
     ok = call("PUT", "/api/users/me/password",
               {"oldPassword": OLD_PWD, "newPassword": NEW_PWD}, token=access)
     check("改密成功", ok.get("code") == 0, ok.get("code"))
@@ -145,6 +166,10 @@ def main() -> int:
     print("\n[4] 旧凭证必须全部失效（这才是「改密」的实际含义）")
     after = call("GET", "/api/users/me", token=access)
     check("旧 accessToken 已被拉黑（40101）", after.get("code") == 40101, after.get("code"))
+
+    if other_access:
+        check("另一台设备的旧 accessToken 也被撤销（40101，L-3 修复）",
+              call("GET", "/api/users/me", token=other_access).get("code") == 40101)
 
     refreshed = call("POST", "/api/auth/refresh", {"refreshToken": refresh})
     check("旧 refreshToken 已失效（40102）", refreshed.get("code") == 40102, refreshed.get("code"))
@@ -159,7 +184,65 @@ def main() -> int:
         check("新登录的 accessToken 可用",
               call("GET", "/api/users/me", token=new_access).get("code") == 0)
 
-    print("\n[5] 自清理")
+    print("\n[5] 失败锁定（M-1 修复：与登录同一口径，5 次 / 15 分钟）")
+    # 此刻账号密码已是 NEW_PWD，用上一步新登录的 new_access。
+    # 注意 [2] 的那次错误原密码与 [3] 成功改密已把计数清零，这里从 0 开始。
+    wrong_codes = []
+    for _ in range(5):
+        r = call("PUT", "/api/users/me/password",
+                 {"oldPassword": "wrong-pass-1", "newPassword": "another789"}, token=new_access)
+        wrong_codes.append(r.get("code"))
+    check("前 5 次错误原密码均为 40104（每次都被计数）",
+          all(c == 40104 for c in wrong_codes), wrong_codes)
+
+    sixth = call("PUT", "/api/users/me/password",
+                 {"oldPassword": "wrong-pass-1", "newPassword": "another789"}, token=new_access)
+    check("第 6 次触发锁定（42902）", sixth.get("code") == 42902, sixth.get("code"))
+
+    during = call("PUT", "/api/users/me/password",
+                  {"oldPassword": NEW_PWD, "newPassword": "another789"}, token=new_access)
+    check("锁定期间即使原密码正确也不放行（锁定优先于比对）",
+          during.get("code") == 42902, during.get("code"))
+
+    lock_key = "codelkup:auth:login_fail:pwd:" + str(uid)
+    ttl = redis_int(redis_cmd("TTL", lock_key))
+    check("锁计数键存在且在 15 分钟窗口内",
+          redis_int(redis_cmd("EXISTS", lock_key)) == 1 and 0 < ttl <= 15 * 60,
+          f"ttl={ttl}")
+
+    redis_cmd("DEL", lock_key)  # 等价于窗口自然过期
+    recovered = call("PUT", "/api/users/me/password",
+                     {"oldPassword": NEW_PWD, "newPassword": "final321"}, token=new_access)
+    check("清除计数后恢复可用（正确原密码改密成功）", recovered.get("code") == 0, recovered.get("code"))
+    check("成功后被计数清零",
+          redis_int(redis_cmd("EXISTS", lock_key)) == 0,
+          redis_int(redis_cmd("EXISTS", lock_key)))
+
+    final_login = call("POST", "/api/auth/login", {"email": email, "password": "final321"})
+    check("锁定恢复后的改密生效：新密码可登录", final_login.get("code") == 0, final_login.get("code"))
+
+    print("\n[6] refresh 轮换的单次消费语义（F1 修复：CAS 原子检查并换发）")
+    # 与改密并行时"删除白名单后旧 refresh 又被写回"的 TOCTOU 已在服务端用 Lua CAS 关闭；
+    # 这里从客户端侧验证可观察到的语义：一枚 refresh 只能消费一次，且消费后接续的
+    # 新 refresh 仍可继续轮换（不是"用过就废掉整条链"，否则正常前端会莫名掉线）。
+    pair = call("POST", "/api/auth/login", {"email": email, "password": "final321"})
+    r0 = pair["data"]["refreshToken"] if pair.get("code") == 0 else None
+    check("准备：拿到一枚有效 refreshToken", bool(r0), pair.get("code"))
+
+    first = call("POST", "/api/auth/refresh", {"refreshToken": r0})
+    r1 = first["data"]["refreshToken"] if first.get("code") == 0 else None
+    check("第一次轮换成功且换发新 refreshToken（与旧值不同）",
+          first.get("code") == 0 and bool(r1) and r1 != r0, first.get("code"))
+
+    replay = call("POST", "/api/auth/refresh", {"refreshToken": r0})
+    check("同一枚 refreshToken 二次使用被拒（40102，已被 CAS 消费）",
+          replay.get("code") == 40102, replay.get("code"))
+
+    second = call("POST", "/api/auth/refresh", {"refreshToken": r1})
+    check("换发出的新 refreshToken 仍可继续轮换（链路未被误伤）",
+          second.get("code") == 0, second.get("code"))
+
+    print("\n[7] 自清理")
     try:
         cleanup_rate_buckets()
         left = count_rate_buckets()

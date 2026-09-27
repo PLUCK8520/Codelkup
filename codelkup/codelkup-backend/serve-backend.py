@@ -18,8 +18,21 @@ env = dict(os.environ)
 env.pop("SERVER__PORT", None)   # 注入变量优先级高于 yml，必须剔除
 
 logf = open(LOG, "wb", buffering=0)
+# JVM 参数（2026-09-27 开发环境优化）：以前裸跑 jar，MaxHeap 默认取物理内存的 1/4
+# （本机 ≈3.9GB），dev 负载根本用不到，某天压测后可能驻留不还。
+#   -Xmx512m / -Xms256m       堆上限与初始堆：dev 数据量下 512m 绰绰有余
+#   -XX:MaxMetaspaceSize=256m 元空间封顶（类加载 + 代理曾无上限）
+#   -XX:+UseSerialGC          小堆场景比 G1 更省内存、更适合单请求量级的 dev
+#   -XX:TieredStopAtLevel=1   只到 C1 编译：dev 不要峰值吞吐，省 JIT 内存、启动更快
+# ⚠️ 验证脚本不受影响：自起型脚本直接 `java -jar`（无这些参数），性能口径不变。
+JVM_OPTS = [
+    "-Xmx512m", "-Xms256m", "-XX:MaxMetaspaceSize=256m",
+    "-XX:+UseSerialGC", "-XX:TieredStopAtLevel=1",
+]
+# 命令行附加参数原样透传给 jar（验收脚本需要把定时窗口压到秒级，例如
+# --codelkup.score.initial-delay-ms=2000 --codelkup.sse.heartbeat-ms=2000）
 proc = subprocess.Popen(
-    ["java", "-jar", "target/codelkup-backend-0.0.1-SNAPSHOT.jar"],
+    ["java"] + JVM_OPTS + ["-jar", "target/codelkup-backend-0.0.1-SNAPSHOT.jar"] + sys.argv[1:],
     cwd=BACKEND, env=env,
     stdout=logf, stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL,
 )

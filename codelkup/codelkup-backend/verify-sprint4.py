@@ -240,8 +240,18 @@ def main():
               search("+++")["data"]["total"] == 0, search("+++")["data"]["total"])
 
         # LIKE 通配符转义（单字才走 LIKE，这里用 "%%" 验证不匹配全表）
-        check("S4.1 LIKE 通配符 '%' 被转义（不返回全表）",
-              search("%")["data"]["total"] == 0, search("%")["data"]["total"])
+        # ⚠️ 这里**不能**断言 `== 0`：库里只要有一篇帖子正文里出现字面的 '%'
+        #    （实测：演示帖 20102 的技术复盘里写了 "P95 187→90ms（-52%）"），
+        #    它就会被**正确命中** —— 那恰恰说明转义生效了。
+        #    要验的是"没退化成全表扫描"，所以拿全表总数当上界，并和"库里真含字面 %"
+        #    的帖子数逐一对账（用 INSTR 而不是 LIKE：避开通配符自身）。
+        pct_hits = search("%")["data"]["total"]
+        all_posts = call("GET", "/api/posts?size=1")[1]["data"]["total"]
+        db_pct = db_scalar("SELECT COUNT(*) FROM t_post WHERE status=1 AND "
+                           "(INSTR(title, CHAR(37))>0 OR INSTR(content, CHAR(37))>0)")
+        check("S4.1 LIKE 通配符 '%' 被转义：只精确命中字面量、不退化成全表",
+              pct_hits == db_pct and pct_hits < all_posts,
+              "命中=%s 库含字面%%=%s 全表=%s" % (pct_hits, db_pct, all_posts))
 
         # 相关性排序 & 注入防护
         check("S4.1 默认按相关性排序可用", search("验收", sort="relevance")["code"] == 0, "")
@@ -419,10 +429,13 @@ def main():
         a_before = notify_count_of(uid_a)
         call("POST", "/api/posts/%d/comments" % pid,
              {"content": "A 自己评论自己的帖子。"}, token=tk_a)
-        call("POST", "/api/posts/%d/like" % pid, token=tk_a)
+        # L-1 修复：作者自赞已被后端拦截（40001）；自藏保留（书签语义）——
+        # 两条路径都不该产生通知（下面是拦截后的补充断言）
+        st, b = call("POST", "/api/posts/%d/like" % pid, token=tk_a)
+        check("S4.4 作者自赞被拒（L-1 修复，40001）", b.get("code") == 40001, b.get("code"))
         call("POST", "/api/posts/%d/collect" % pid, token=tk_a)
         time.sleep(1.2)
-        check("S4.4 自己评论/点赞/收藏自己的帖子 → 不给自己发通知",
+        check("S4.4 自己评论 / 自赞(被拒) / 自藏 → 都不给自己发通知",
               notify_count_of(uid_a) == a_before,
               "before=%s after=%s" % (a_before, notify_count_of(uid_a)))
 
@@ -477,12 +490,118 @@ def main():
               all(x["isRead"] == 0 for x in b["data"]["records"]),
               [x["isRead"] for x in b["data"]["records"]][:5])
 
+        # ---- V0.4：类型分组筛选（通知中心的 tab） ----
+        # ⚠️ 期望值一律从数据库现算，不写死数字：上面的断言已经插了若干通知，
+        #    写死的数字会随断言顺序变化，让脚本自己变脆
+        #    （项目约定：期望值尽量从"真值来源"动态取）。
+        db_comment = db_scalar("SELECT COUNT(*) FROM t_notification WHERE receiver_id=%d AND type=%d" % (uid_a, N_COMMENT))
+        st, b = call("GET", "/api/notifications?type=1&size=50", token=tk_a)
+        check("S4.4/V0.4 按类型筛选 type=1 只返回评论，条数与库一致",
+              b["code"] == 0 and b["data"]["total"] == db_comment
+              and all(x["type"] == N_COMMENT for x in b["data"]["records"]),
+              "api=%s db=%s" % (b["data"].get("total"), db_comment))
+
+        db_cr = db_scalar("SELECT COUNT(*) FROM t_notification WHERE receiver_id=%d AND type IN (%d,%d)"
+                          % (uid_a, N_COMMENT, N_REPLY))
+        st, b = call("GET", "/api/notifications?type=1,2&size=50", token=tk_a)
+        check("S4.4/V0.4 多类型 IN：type=1,2（「评论与回复」合成一个 tab）",
+              b["code"] == 0 and b["data"]["total"] == db_cr
+              and all(x["type"] in (N_COMMENT, N_REPLY) for x in b["data"]["records"]),
+              "api=%s db=%s" % (b["data"].get("total"), db_cr))
+
+        st, b = call("GET", "/api/notifications?type=1&type=2&size=50", token=tk_a)
+        check("S4.4/V0.4 重复键写法（type=1&type=2）与逗号写法等价",
+              b["code"] == 0 and b["data"]["total"] == db_cr, b["data"].get("total"))
+
+        st, b = call("GET", "/api/notifications?type=3&size=50", token=tk_a)
+        check("S4.4/V0.4 类型筛选与已读状态正交（type=3 仍能查到已读过的那条点赞）",
+              b["code"] == 0 and any(x["isRead"] == 1 for x in b["data"]["records"]),
+              [(x["type"], x["isRead"]) for x in b["data"]["records"]])
+
+        st, b = call("GET", "/api/notifications?onlyUnread=true&type=1&size=50", token=tk_a)
+        check("S4.4/V0.4 类型筛选与 onlyUnread 可叠加",
+              b["code"] == 0 and all(x["isRead"] == 0 and x["type"] == N_COMMENT for x in b["data"]["records"]),
+              [(x["type"], x["isRead"]) for x in b["data"]["records"]])
+
+        st, b = call("GET", "/api/notifications?type=99&size=50", token=tk_a)
+        check("S4.4/V0.4 未知类型返回空列表而不是报错",
+              b["code"] == 0 and b["data"]["total"] == 0, b.get("code"))
+
+        st, b = call("GET", "/api/notifications?type=abc", token=tk_a)
+        check("S4.4/V0.4 非法类型被拦下（40003，而不是兜底的 50001）", b.get("code") == 40003, b.get("code"))
+
+        db_all = db_scalar("SELECT COUNT(*) FROM t_notification WHERE receiver_id=%d" % uid_a)
+        st, b = call("GET", "/api/notifications?type=&size=50", token=tk_a)
+        check("S4.4/V0.4 空类型参数被忽略（等同全部类型，不报错）",
+              b["code"] == 0 and b["data"]["total"] == db_all, "api=%s db=%s" % (b["data"].get("total"), db_all))
+
+        # ---- V0.4：各类型未读数（分组角标） ----
+        st, b = call("GET", "/api/notifications/unread-counts", token=tk_a)
+        counts = {x["type"]: x["count"] for x in b["data"]}
+        check("S4.4/V0.4 分组角标可读", b["code"] == 0, b.get("code"))
+        check("S4.4/V0.4 各类型未读数逐类与数据库对账",
+              all(v == db_scalar("SELECT COUNT(*) FROM t_notification WHERE receiver_id=%d AND is_read=0 AND type=%d"
+                                 % (uid_a, k)) for k, v in counts.items()),
+              counts)
+        check("S4.4/V0.4 分组角标之和 == 总未读数（同一套数据的两个口径）",
+              sum(counts.values()) == unread(tk_a),
+              "sum=%s total=%s" % (sum(counts.values()), unread(tk_a)))
+        check("S4.4/V0.4 已全部读过的类型不出现在角标里（type=3 无未读）",
+              N_LIKE not in counts, sorted(counts.keys()))
+
         # ---- 全部已读 ----
         st, b = call("POST", "/api/notifications/read-all", token=tk_a)
         check("S4.4 全部标记已读成功", b["code"] == 0 and b["data"] >= 1, b.get("data"))
         check("S4.4 全部已读后未读数为 0",
               call("GET", "/api/notifications/unread-count", token=tk_a)[1]["data"] == 0,
               call("GET", "/api/notifications/unread-count", token=tk_a)[1]["data"])
+
+        # ==================== 评论点赞的通知语义（第三轮审计修正） ====================
+        # 修正两个问题：① 评论点赞此前与帖子点赞发出**完全相同**的通知元组，
+        # 会被"同源未读去重"当成重复吃掉（先赞帖子再赞评论 → 第二条静默消失）；
+        # ② 文案一律写"赞了你的帖子"，对评论点赞是事实错误。
+        # 现在：目标记为评论（targetType=2），所属帖子由服务端 JOIN 出（targetPostId），跳转不受影响。
+        likes_before = notify_count_of(uid_b, N_LIKE)
+
+        st, b = call("POST", "/api/posts", {
+            "title": "B 的验收帖 %d" % ts,
+            "content": "这帖用于验证评论点赞的通知语义，正文够十个字。",
+            "boardId": board_id, "type": 0,
+        }, token=tk_b)
+        check("[评论点赞] 准备：B 发帖成功", b.get("code") == 0, b.get("code"))
+        pid_b = b["data"]["id"]
+
+        st, b = call("POST", "/api/posts/%d/comments" % pid_b,
+                     {"content": "B 自己帖下的一条评论，用来被点赞。"}, token=tk_b)
+        check("[评论点赞] 准备：B 的评论创建成功", b.get("code") == 0, b.get("code"))
+        cmt_b = b["data"]["id"]
+
+        st, b = call("POST", "/api/posts/%d/like" % pid_b, token=tk_a)
+        check("[评论点赞] 准备：A 先赞 B 的帖子（制造一条同源未读点赞通知）",
+              b.get("code") == 0, b.get("code"))
+        wait_until(lambda: notify_count_of(uid_b, N_LIKE) >= likes_before + 1)
+
+        st, b = call("POST", "/api/comments/%d/like" % cmt_b, token=tk_a)
+        check("[评论点赞] A 再赞 B 的评论", b.get("code") == 0, b.get("code"))
+        wait_until(lambda: notify_count_of(uid_b, N_LIKE) >= likes_before + 2)
+        check("[评论点赞] 两条点赞通知并存（评论点赞不再被帖子点赞的去重吃掉）",
+              notify_count_of(uid_b, N_LIKE) == likes_before + 2,
+              notify_count_of(uid_b, N_LIKE))
+
+        st, b = call("GET", "/api/notifications?type=3&size=10", token=tk_b)
+        recs_like = b["data"]["records"]
+        cmt_notif = next((x for x in recs_like if x.get("targetType") == 2), None)
+        check("[评论点赞] 目标记为评论且带所属帖子 ID（targetType=2 + targetPostId）",
+              cmt_notif is not None and cmt_notif.get("targetId") == cmt_b
+              and cmt_notif.get("targetPostId") == pid_b,
+              [(x.get("targetType"), x.get("targetId"), x.get("targetPostId")) for x in recs_like][:4])
+        check("[评论点赞] 文案是「赞了你的评论」（不再是「赞了你的帖子」）",
+              cmt_notif is not None and "赞了你的评论" in (cmt_notif.get("content") or ""),
+              cmt_notif.get("content") if cmt_notif else None)
+        check("[评论点赞] 帖子类点赞通知的 targetPostId 回落为 targetId（JOIN 不影响既有语义）",
+              all(x.get("targetPostId") == x.get("targetId")
+                  for x in recs_like if x.get("targetType") == 1),
+              [(x.get("targetType"), x.get("targetId"), x.get("targetPostId")) for x in recs_like][:4])
 
         # ---- 权限 ----
         st, b = call("GET", "/api/notifications")

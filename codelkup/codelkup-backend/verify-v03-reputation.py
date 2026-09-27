@@ -197,7 +197,8 @@ def main() -> int:
     check("采纳成功", accept.get("code") == 0, accept.get("code"))
     expect_reputation(b_id, 15, "回答被采纳 → +15")
 
-    call("POST", f"/api/posts/{post_id}/like", token=token_a)
+    st_self = call("POST", f"/api/posts/{post_id}/like", token=token_a)
+    check("自赞被后端拒绝（L-1 修复，40001）", st_self.get("code") == 40001, st_self.get("code"))
     expect_reputation(a_id, 0, "给自己的帖子点赞 → 不给分（防自刷）")
 
     call("POST", f"/api/posts/{post_id}/accept/{comment_id}", token=token_a)
