@@ -597,6 +597,16 @@ def main():
             created_users += 1
             action = "新建"
         except ApiError as e:
+            # 两种"环境没准备好"的失败给动作化提示（真机复验发现：这两种都会在首次部署时撞上）
+            if "40304" in str(e):
+                print("✗ 注册 %s 被拒：注册开关处于关闭状态（40304）" % email)
+                print("  首次灌数据需要临时开放注册：.env 里 REGISTRATION_ENABLED=true → `docker compose up -d` → 重跑本脚本；")
+                print("  灌完再改回 false → `docker compose restart backend`（已有账号的登录不受影响）。")
+                return 1
+            if "42901" in str(e):
+                print("✗ 注册 %s 被限流（42901）：注册限流按 IP 计，而本脚本要建 %d 个演示账号。" % (email, len(USERS)))
+                print("  处置：.env 里设 RATE_LIMIT_REGISTER_PER_HOUR>=%d → `docker compose up -d`（或清掉该 IP 的桶/等窗口过）→ 重跑本脚本。" % (len(USERS) + 2))
+                return 1
             if "40901" not in str(e):
                 print("✗ 注册 %s 失败：%s" % (email, e))
                 return 1

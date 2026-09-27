@@ -45,7 +45,11 @@ if [[ ! -f .env ]]; then
 fi
 
 log "校验 .env 关键项"
-set -a; . ./.env; set +a
+# ⚠️ 解析前统一去掉 CR（第三轮审计）：在 Windows 上编辑过的 .env 是 CRLF，
+#    直接 `source` 会把 \r 带进密码 / JWT 的值里 —— 表现为"compose 起得来、
+#    但后端连不上库"这类很难查的故障。这里用进程替换读入去 CR 后的副本，
+#    不落临时文件、不改动原始 .env。
+set -a; . <(tr -d '\r' < ./.env); set +a
 [[ -n "${DB_PASSWORD:-}"        ]] || fail ".env 缺少 DB_PASSWORD"
 [[ -n "${MYSQL_ROOT_PASSWORD:-}" ]] || fail ".env 缺少 MYSQL_ROOT_PASSWORD"
 [[ -n "${JWT_SECRET:-}"         ]] || fail ".env 缺少 JWT_SECRET"

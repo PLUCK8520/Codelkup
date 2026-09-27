@@ -93,6 +93,42 @@ services:
       # 上传目录指向数据卷挂载点（Dockerfile 里已建好并设了属主）
       UPLOAD_ROOT: /app/uploads
       CORS_ALLOWED_ORIGINS: ${CORS_ALLOWED_ORIGINS:-http://localhost:8080}
+      # ---------- 注册开关（PRE-MORTEM T0-2）----------
+      # ⚠️ environment 是显式白名单：**不写在这里的变量不会进容器**，.env 里设了也无效
+      #    （第二轮审计 F4 实证 —— 上线自检会读 /api/system/config 验证它真的生效）。
+      # 默认值取 false（第三轮审计）：fail-safe —— 漏配时是"注册关闭"（安全侧），
+      #    而不是"公网注册开着"。本地演练要开注册请在 .env 里显式写 true
+      #    （.env.example 已给 true，seed-demo 需要建 6 个演示账号）。
+      REGISTRATION_ENABLED: ${REGISTRATION_ENABLED:-false}
+      # ---------- 限流阈值（L-4 起全部可配；不写则用 application.yml 默认）----------
+      # 共享出口 IP（办公/校园 NAT）被注册限流误伤、或演示站要放宽/收紧时，在 .env 覆盖即可。
+      RATE_LIMIT_REGISTER_PER_HOUR: ${RATE_LIMIT_REGISTER_PER_HOUR:-5}
+      RATE_LIMIT_LOGIN_IP_MAX: ${RATE_LIMIT_LOGIN_IP_MAX:-30}
+      RATE_LIMIT_UPLOAD_PER_HOUR: ${RATE_LIMIT_UPLOAD_PER_HOUR:-30}
+      RATE_LIMIT_POST_PER_HOUR: ${RATE_LIMIT_POST_PER_HOUR:-20}
+      RATE_LIMIT_COMMENT_PER_HOUR: ${RATE_LIMIT_COMMENT_PER_HOUR:-60}
+      RATE_LIMIT_REPORT_PER_HOUR: ${RATE_LIMIT_REPORT_PER_HOUR:-20}
+      RATE_LIMIT_DRAFT_PER_HOUR: ${RATE_LIMIT_DRAFT_PER_HOUR:-240}
+      RATE_LIMIT_SSE_TICKET_PER_HOUR: ${RATE_LIMIT_SSE_TICKET_PER_HOUR:-120}
+      RATE_LIMIT_SIMILAR_PER_HOUR: ${RATE_LIMIT_SIMILAR_PER_HOUR:-300}
+      RATE_LIMIT_AI_PER_HOUR: ${RATE_LIMIT_AI_PER_HOUR:-10}
+      RATE_LIMIT_LIKE_PER_HOUR: ${RATE_LIMIT_LIKE_PER_HOUR:-300}
+      RATE_LIMIT_COLLECT_PER_HOUR: ${RATE_LIMIT_COLLECT_PER_HOUR:-300}
+      RATE_LIMIT_COMMENT_LIKE_PER_HOUR: ${RATE_LIMIT_COMMENT_LIKE_PER_HOUR:-300}
+      RATE_LIMIT_FOLLOW_PER_HOUR: ${RATE_LIMIT_FOLLOW_PER_HOUR:-60}
+      RATE_LIMIT_REFRESH_PER_HOUR: ${RATE_LIMIT_REFRESH_PER_HOUR:-120}
+      RATE_LIMIT_PROFILE_PER_HOUR: ${RATE_LIMIT_PROFILE_PER_HOUR:-30}
+      RATE_LIMIT_POST_EDIT_PER_HOUR: ${RATE_LIMIT_POST_EDIT_PER_HOUR:-30}
+      # ---------- AI 客户端（M3-4）----------
+      # ⚠️ 不配 AI_API_KEY 就是"AI 未启用"：相关接口降级返回（仅检索结果 + 提示），
+      #    其余功能完全不受影响。默认值刻意留空 —— 密钥只从 .env / 环境注入。
+      AI_ENABLED: ${AI_ENABLED:-true}
+      AI_API_KEY: ${AI_API_KEY:-}
+      AI_BASE_URL: ${AI_BASE_URL:-https://api.deepseek.com}
+      AI_MODEL: ${AI_MODEL:-deepseek-chat}
+      # 实现选择（M3-11）：rest（默认）| spring-ai。两者读同一份上面的配置
+      AI_IMPL: ${AI_IMPL:-rest}
+      AI_DAILY_BUDGET: ${AI_DAILY_BUDGET:-2000}
       # JVM 堆上限：容器里默认按宿主机物理内存算堆，小内存 VPS 上会和 MySQL 抢内存
       # 被 OOM Kill。2C2G 建议 35~40，2C4G 建议 55（见 deploy/.env.production.example）
       JVM_MAX_RAM_PERCENTAGE: ${JVM_MAX_RAM_PERCENTAGE:-75.0}
