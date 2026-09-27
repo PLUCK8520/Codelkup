@@ -139,7 +139,7 @@
 
 | # | 项 | 性质 | 处置建议 |
 |---|---|---|---|
-| 1 | ~~**git 未提交/未推送**（工作区含全部未提交改动）~~ → 已按 7 组完成 **6 个分逻辑提交**（docs / 后端 / 前端 / 验收资产 / 部署包 / CI），工作区干净 | ✅ 提交部分已完成（2026-09-27） | **推送待配置远端**：仓库尚无 `remote`（`git remote -v` 为空）、本机未安装 `gh` —— 需要你先在 GitHub 建好空仓库并给出地址，我再 `git remote add origin <url>` + `git push -u origin master`（或先把分支改名为 `main`）。见 TASKS 备注 52 |
+| 1 | ~~**git 未提交/未推送**（工作区含全部未提交改动）~~ → 已按 7 组完成 **6 个分逻辑提交**（docs / 后端 / 前端 / 验收资产 / 部署包 / CI）+ **首推前 dev 凭据清洗与历史改写**（`git log -S` 与 `git grep` 双证全历史无字面量），工作区干净 | ✅ 提交与清洗均已完成（2026-09-27） | **推送待配置远端**：仓库尚无 `remote`（`git remote -v` 为空）、本机未安装 `gh` —— 需要你先在 GitHub 建好空仓库并给出地址，我再 `git remote add origin <url>` + `git push -u origin master`（或先把分支改名为 `main`）。见 TASKS 备注 52 / 53 |
 | 2 | GitHub Actions 远端绿灯未取 | 依赖推送 | 随第 1 项完成 |
 | 3 | 真实 DeepSeek key 调用未验（验收环境无 key，降级路径已全验） | 环境限制 | 部署前决定是否配 key；配了跑一次 `verify-v03-ai.py` 真调用 |
 | 4 | 真实 Prometheus 抓取未验（指标端点行为已验证） | 环境限制 | 部署后按 DEPLOY §9.4 抓一次 |
