@@ -84,6 +84,18 @@ jobs:
       - name: 凭证刷新链路契约测试（mock 后端）
         run: node verify-refresh-frontend.mjs
 
+      # M3-2：实时通道的前端状态机（假 EventSource，无需后端）
+      - name: 通知实时通道契约测试
+        run: node verify-v03-sse-frontend.mjs
+
+      # V0.4 补充：通知列表实时刷新的触发契约（store 的 pushedAt 语义，仅本地源码）
+      - name: 通知列表实时刷新契约测试
+        run: node verify-v04-notify-live.mjs
+
+      # M3-8：AI 面板（答案分段 / 降级文案 / 不拼 HTML 的渲染边界）
+      - name: AI 面板契约测试
+        run: node verify-v03-ai-frontend.mjs
+
       - name: 既有前端契约测试（渲染消毒 / 高亮切分）
         run: |
           node verify-sprint2-frontend.mjs
