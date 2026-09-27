@@ -551,6 +551,7 @@ SHOW VARIABLES LIKE 'ngram_token_size';
 | `t_comment` | 评论表 | 百万级 | **千级** |
 | `t_user_action` | 点赞/收藏记录 | 百万级 | **千级** |
 | `t_notification` | 通知表 | 百万级 | **千级** |
+| `t_draft` | 服务端草稿箱（V0.4）| 万级 | **十级**（每用户约 1 条新建稿 + 若干编辑稿）|
 | `t_user_stat` | 用户统计 | 万级 | **百级** |
 | `t_checkin` | 学习打卡（V0.3）| 十万级 | **千级** |
 
@@ -833,6 +834,25 @@ ORDER BY relevance DESC;
 3. ES 是**性能优化**而非**功能补全**，放 V0.2 作为优化素材更合适：
    *"V1 用 MySQL ngram，发现中文分词效果与性能瓶颈后迁移到 ES"* —— 这是能讲的优化叙事
 
+### ⚠️ 实测补记（2026-09-26）：BOOLEAN MODE 下"连续中文串 = 短语匹配"
+
+这条是 M3-6（RAG 检索）时量出来的，会直接影响**怎么拿用户输入去搜**：
+
+| 关键词 | 命中 | 说明 |
+|---|---|---|
+| `配额和限流到底差在哪`（10 字连续中文） | **0** | 索引按 2-gram 建，连续串被当作**短语**整体匹配 → 整句提问必然落空 |
+| `配额 限流`（空格分隔） | 有结果 | 空格 = OR 语义（BOOLEAN MODE 的默认行为） |
+| `实测对比` | 12 | 短语匹配（同一段文字里必须连续出现） |
+| `实测 对比` | 118 | 两个词各自匹配即可 |
+
+**对策（RAG 问答用）**：提问先拆成"2-gram 词袋"再检索 ——
+每个中文连续串切成相邻 2 字窗口（`虚拟 拟线 线程 …`）用空格连接，
+召回交给 OR、排序交给相关性。拉丁/数字串整段保留（`Redis` 不该被切成 `Re`/`ed`）。
+实现见 `AiAnswerService.buildSearchKeyword`（有单测钉住）。
+**已知局限**：没有分词器就只能全切，会带进少量虚词片段（`该怎`/`么选`），
+使候选集偏大；排序仍能保证主题相关，但 top-k 未必是"最近最相关"的帖子 ——
+这正是将来换 ES（方案 B）要解决的第一个问题。
+
 ## 10.5 热度分算法（V0.2）
 
 ```java
@@ -848,6 +868,168 @@ score = (likeCount * 3 + commentCount * 5 + viewCount * 0.1)
 - 分母时间衰减保证新帖有机会上榜
 - `@Scheduled` 每 10 分钟遍历计算，写入 `t_post.score`
 - 排行榜用 Redis ZSet 维护（`ZADD post:hot {score} {postId}`）
+
+## 10.6 AI 客户端（V0.3 · M3-4 / ADR-1）
+
+AI 线（相似问题 / TL;DR / RAG 问答）共用一个客户端抽象，**不引 Spring AI starter**（ADR-1）：
+用 Spring 6.1 自带的 `RestClient` 直连 OpenAI 兼容端点，零新增依赖、超时与降级完全可控；
+`AiClient` 接口留作替换点（将来想演示 Spring AI，在同一接口下加第二实现即可，业务层不动）。
+
+### 契约（业务层必须知道的四条）
+
+| 契约 | 说明 |
+|---|---|
+| **永不抛异常** | 未启用 / 超时 / 上游 4xx-5xx / 返回为空 —— 一律 `AiReply.degraded(failure)`，调用方不需要 try-catch |
+| **不重试** | 一次调用一次请求；要重试由调用方决定（自动重试 = 在失败路径上偷偷翻倍成本） |
+| **未配置 key = 正常状态** | `available()=false`、`chat()` 直接返回 `NO_KEY` 且**不发任何请求**；启动日志会打一行"AI 未启用 \| 原因=…" |
+| **日志不含 prompt 与回答** | 只记模型名 / 耗时 / token 数 / 回答长度 / 降级原因 —— prompt 里有用户内容（RAG 片段甚至是别人的帖子） |
+
+### 降级原因（`AiFailure`）
+
+| 值 | 触发条件 | 调用方该怎么做 |
+|---|---|---|
+| `NO_KEY` | 没配 `AI_API_KEY`（默认状态） | 返回"仅检索结果 + 未启用提示" |
+| `DISABLED` | `AI_ENABLED=false`（线上止血开关） | 同上 |
+| `TIMEOUT` | 连接 / 读取超时（默认 8s） | 同上（这是要单独统计的异常，别和"没配 key"混一起） |
+| `UPSTREAM_ERROR` | 上游 4xx / 5xx、网络或解析异常 | 同上 |
+| `EMPTY_RESPONSE` | 上游 200 但没有可读内容 | 同上 |
+
+### 配置（`codelkup.ai.*`）
+
+| 键 | 默认 | 说明 |
+|---|---|---|
+| `impl` | `rest` | 实现选择（M3-11）：`rest`（自写 RestClient）\| `spring-ai`（框架版）；写错值 = 启动失败（fail-fast） |
+| `enabled` | true | 总开关；关掉后即使配了 key 也不调用 |
+| `api-key` | **空** | ⚠️ 代码里无默认密钥（DoD 第 5 条），只能由环境变量注入；留空 = 未启用 |
+| `base-url` | `https://api.deepseek.com` | OpenAI 兼容端点根地址 |
+| `model` | `deepseek-chat` | 模型名 |
+| `timeout-ms` | 8000 | 连接与读取超时（与 M3-9 的 P95 ≤8s 目标一致） |
+| `max-tokens` / `temperature` | 800 / 0.3 | 默认值，调用方可在请求里覆盖 |
+
+对应环境变量：`AI_ENABLED` / `AI_API_KEY` / `AI_BASE_URL` / `AI_MODEL`
+（已同步到 `.env.example`、`deploy/.env.production.example` 与 `docker-compose.yml` 的 backend environment）。
+
+> ⚠️ **配额没在这一层**：用户级限流（10/小时）+ 全站日预算 + 问题指纹缓存都在
+> **Service 层**（ARCHITECTURE 的时序图：`AiAnswerService` 先查配额再调客户端）。
+> 客户端只管"把一次调用做干净"，不承担成本闸门 —— 否则每个调用方都要依赖 Redis 才能调用 AI。
+
+### 已验证 / 未验证
+
+- **已验证**（`DeepSeekClientTest` **10/10**，用 JDK 自带 `HttpServer` 当上游 stub）：
+  没 key / 关开关时**零请求**；正常响应解析（content / model / total_tokens）；
+  请求形态（`/chat/completions`、`Authorization: Bearer`、两角色 messages、
+  temperature 与 max_tokens 的"覆盖 + 默认"两条路径、显式 `stream=false`）；
+  401 / 500 → `UPSTREAM_ERROR` 且**只发一次请求（无重试）**；
+  读超时 → `TIMEOUT`（150ms 配置下 168ms 返回）；空 choices / 纯空白内容 → `EMPTY_RESPONSE`。
+- **未验证**：与**真实 DeepSeek 端点**的一次真实调用（本机没有 key）。
+  当前验的是"OpenAI 兼容协议"这一层，换任何兼容端点都成立；
+  M3-9 的 `verify-v03-ai.py` 在有 key 的环境里补这一条。
+
+### 第二实现：Spring AI（M3-11 · `codelkup.ai.impl`）
+
+ADR-1 留的替换点在 M3-11 真的用上了：同一 `AiClient` 接口下挂两个实现，用配置切换，
+**业务层（相似问题 / TL;DR / RAG）一行没改**。
+
+| 实现 | 类 | 依赖 | 何时用 |
+|---|---|---|---|
+| `rest`（默认） | `DeepSeekClient` | 无（Spring 6.1 `RestClient`） | 默认；超时/不重试/降级完全自控 |
+| `spring-ai` | `SpringAiClient` | `spring-ai-openai` 1.0.3（+6 个 jar / 0.8 MB） | 想演示"框架也能接"时；或将来要换成框架的 tool-calling / 多模型抽象 |
+
+两个实现都带 `@ConditionalOnProperty(codelkup.ai.impl=…)`，容器里**永远只有一个** `AiClient`
+（`rest` 用 `matchIfMissing=true`，所以不配这个键时行为与 M3-10 之前完全一致；
+写错值（既不是 `rest` 也不是 `spring-ai`）会导致启动失败 —— 有意的 fail-fast，不给"静默用错实现"的机会）。
+
+**为什么手动 `new OpenAiChatModel` 而不用 `spring-ai-starter-model-openai`**：
+① starter 启动就要求 `spring.ai.openai.api-key` 非空，而本项目"没配 key"是正常状态（`NO_KEY` 降级），
+为迁就自动配置就要塞假 key；② 会有第二套配置键（`spring.ai.*`）与 `codelkup.ai.*` 并存，早晚改一处漏一处；
+③ 手动构建后两个实现读**同一份 `AiSettings`**，"切换"才是一次纯实现替换。
+
+**三处必须显式覆盖框架默认值**（否则两个实现的语义会悄悄分叉）：
+
+| 覆盖项 | 框架默认 | 我们设成 | 不覆盖会怎样 |
+|---|---|---|---|
+| 重试 | `RetryUtils.DEFAULT_RETRY_TEMPLATE`（带退避） | `RetryTemplate.maxAttempts=1` | 失败路径偷偷重试，成本翻倍（与"不重试"契约冲突） |
+| 路径 | `/v1/chat/completions` | `/chat/completions` | 同一个 `base-url` 在两个实现下打到不同 URL（stub 验收会立刻发现） |
+| 观测 | 需要 `ObservationRegistry` | `ObservationRegistry.NOOP` | 同一件事出现两套指标口径（我们已有 `codelkup.ai.calls`） |
+
+**实测对比**（`verify-v03-ai.py` **87/87 × 2**，同一套断言、同一份配置）：
+
+| 指标（阶段 C，10 次互不相同的真调用） | `rest` | `spring-ai` |
+|---|---|---|
+| 中位数 | 152 ms | 157 ms |
+| P95 | 374 ms | 453 ms |
+| 8 秒超时边界 | 8078 ms 触发 `TIMEOUT` | 8049 ms 触发 `TIMEOUT` |
+| 慢上游 3 秒 | 3072 ms 正常返回 | 3072 ms 正常返回 |
+| 500 时的请求次数 | 1（不重试） | 1（**已覆盖**框架默认重试） |
+
+结论：两条路都能跑通全部断言，差别是**可控性与依赖体积** ——
+所以默认仍是自写实现，框架版作为"可切换的第二实现"存在。
+⚠️ 单元测试里有一条是专门"反着测"的：把 `maxAttempts` 设回 3，断言 stub 会收到 **3** 次请求
+（证明重试机制在框架内部确实是活的、是被我们关掉的，而不是"框架本来就不重试"）。
+
+**部署侧也验过**：重建后端镜像后默认走 `rest`（容器日志 `DeepSeekClient`）、上线自检 22/22；
+再用**同一个镜像**起一个 `AI_IMPL=spring-ai` 的临时容器，日志出现 `SpringAiClient : AI 客户端（Spring AI 实现）…`
+且启动成功 —— 说明框架 jar 确实进了镜像（fat jar 内 5 个 `spring-ai*`）、类能加载、配置能切换。
+（在真机上切换只需改 `.env` 的 `AI_IMPL` 后 `docker compose up -d`。）
+
+---
+
+## 10.7 可观测性：指标（V0.3 · M3-10）
+
+### 端点与可达边界（这一节最该记住的部分）
+
+| 项 | 口径 |
+|---|---|
+| 端点 | `GET /actuator/prometheus`（Micrometer + `micrometer-registry-prometheus`），格式为 Prometheus 文本 |
+| 谁能抓 | **只有内部来源**：回环（`127/8`、`::1`）与 RFC1918 私网（`10/8`、`172.16~31`、`192.168/16`）—— 由 `SecurityConfig` 按 `request.getRemoteAddr()` 判定，**不是 `permitAll`** |
+| 公网路径 | nginx `location /actuator/ { return 404; }`（第一道）+ compose 不映射后端端口；即便有人把 8085 暴露出去，非私网来源仍拿不到任何样本 |
+| 统一标签 | 所有指标自动带 `application="codelkup"`（`management.metrics.tags.application`），多服务共用一个 Prometheus 时可区分 |
+| 其余端点 | 只有 `health` / `info` / `prometheus` 三个被暴露；`health` 的详情仍是 `when-authorized` |
+
+> ⚠️ 为什么值得多写这十几行判定，而不是"放行 + 靠 nginx 挡"：
+> 指标里有业务量级、错误分布与 AI 调用成本。若用 `permitAll`，"公网抓不到"就**只由部署拓扑保证**——
+> 一旦有人为排障把后端端口映射出来，指标直接全裸。按来源地址放行后，这条边界变成**代码里的行为**，
+> 并且可被脚本证伪（下节）。
+
+### 自定义指标清单
+
+| 指标 | 类型 | 打点位置 | 排障时看什么 |
+|---|---|---|---|
+| `codelkup_score_rebuild_seconds` | Timer | `ScoreService.recalcOnce()` 成功路径 | 重算耗时；突然变长 = 库在变慢 |
+| `codelkup_score_last_affected_rows` | Gauge（`AtomicInteger` 字段持有） | 同上 | 最近一轮影响行数；**-1 = 还没跑过**（0 = 跑过且无变化） |
+| `codelkup_score_enabled` | Gauge（方法引用） | `@PostConstruct` | 1/0，确认"开关是不是被误关" |
+| `codelkup_score_rebuild.failed` | Counter | `recalcOnce()` 失败路径 | 只靠日志（INFO 级、没人盯）发现不了"一直在失败" |
+| `codelkup_ai_calls_total{result,reason}` | Counter | `AiCallGuard.record()`（**在写日志的 try 之前**） | `result=ok/cache_hit/degraded` × `reason=NO_KEY/BUDGET/TIMEOUT/...`；降级占比是成本与质量的合成信号 |
+| `codelkup_sse_connections` | Gauge（观测 `totalConnections()`） | `@PostConstruct` | **连接泄漏唯一的早期信号**（只涨不跌） |
+| `codelkup_sse_online_users` | Gauge（直接观测 `emitters` 这个 Map） | `@PostConstruct` | 在线人数；与连接数一起看能区分"多标签"与"多人" |
+| `codelkup_counter_last_drift` | Gauge（`AtomicInteger` 字段持有） | `CounterRebuildService` 两个重建入口 | 最近一次重建的偏差总数；长期非 0 ⇒ "最终一致"方案在漂 |
+
+### 三个实现约定（容易写错，且错了不报错）
+
+1. **Gauge 必须"字段持有 + 只注册一次"**：Micrometer 的 Gauge 持有的是 `Number` 实例的**弱引用**，
+   随手 `new AtomicInteger(...)` 传进去会被 GC 掉，指标时有时无（本项目在热度分那处已踩过一次）。
+   SSE 那两处用 `this` 方法引用与长期存活的 `Map` 字段，天然稳定。
+2. **降级/CacheHit 的标签口径与日志表一致**：`AiCallGuard.record()` 是唯一的写入口，
+   指标就挂在那里 —— 日志表与指标不会出现两套口径。
+3. **"没跑过"用 -1，不用 0**：与前端"失败不显示 0"同一原则：指标也不许把"没有数据"说成"数据是 0"。
+
+### 一个真实现象（不是缺陷）
+
+客户端**异常断开**（拔网线 / 进程被杀）时，`codelkup_sse_connections` **不会立刻回落**：
+半开连接只有"下一次往里写"时才暴露，而平时唯一的写就是心跳，所以默认要等满一拍（`codelkup.sse.heartbeat-ms`，默认 25s）。
+这正是心跳存在的理由（也是连接泄漏能被发现的原因）—— 验收脚本 `verify-v03-metrics.py` 因此把等待上限
+（`--sse-timeout`，默认 35s）设在一拍心跳之上，并建议验收时把 `heartbeat-ms` 压到 2000。
+
+### 已验证 / 未验证
+
+- **已验证**（`verify-v03-metrics.py` **22/22**，附着型；另 `ScoreServiceTest` 两条单测）：
+  端点本机可达且六条自定义时间序列齐全、都带统一标签；
+  **来源闸门**：`XFF=8.8.8.8` → `40101`（拿不到任何样本）、`XFF=172.18.0.5` / `192.168.1.20` → 正常返回；
+  四组指标在触发真实动作后**值确实变化**（`rebuild_seconds_count=1` / `last_affected_rows=10207` 与启动日志逐值相等、
+  `ai_calls_total{reason="NO_KEY",result="degraded"} 1.0`、`last_drift` 由 -1 变为报告里的 `driftCount`、
+  SSE 连上 `0→1` 且断开后回落 0）；**compose 栈**：容器网络内直连 `backend:8085` 与跨容器（`frontend → backend`，来源 172.x）都能看到自定义指标，公网侧经 nginx（本机 WEB_PORT=8090）→ 404。
+- **未验证**：真实 Prometheus / Grafana 的抓取与告警规则（本轮只做"暴露 + 可达边界"，
+  没有部署抓取方 —— ALIGNMENT 的 M3-10 口径也只要求"仅容器网络可达"）。
 
 ---
 
@@ -906,11 +1088,22 @@ score = (likeCount * 3 + commentCount * 5 + viewCount * 0.1)
 | PUT | `/me/password` | 修改密码（验旧密码 → 清 refresh 白名单并拉黑当前 accessToken，需重新登录）|
 | POST | `/me/avatar` | 上传头像（jpg/png/webp ≤2MB；替换成功后清理旧文件，与正文配图共用上传限流桶）|
 | GET | `/me/collections` | 我的收藏（分页，按收藏时间倒序；已被删除/下架的帖子不返回）|
-| GET | `/{id}/posts` | 某用户的帖子列表 |
 | GET | `/{id}/followers` | 粉丝列表 |
 | GET | `/{id}/followees` | 关注列表 |
 | POST | `/{id}/follow` | 关注 |
 | DELETE | `/{id}/follow` | 取关 |
+| GET | `/ranking` | 声望榜（V0.4，公开）：`limit` 1~50 默认 20；只列未注销/未封禁且声望>0；并列按 id 定序；名次 `rank` 由服务端给出 |
+
+> ⚠️ **按实现更正（M3-2 实测发现）**：本文档此前列过 `GET /users/{id}/posts`（"某用户的帖子列表"），
+> 但**后端从来没有这个处理器** —— 个人主页的帖子列表走的是 `GET /api/posts?authorId={id}`
+> （与首页/搜索同一个列表接口，前端 `postApi.list({ authorId })`）。
+> 检索"作者的全部帖子"时请用后者；`/api/users/*/posts` 在 SecurityConfig 里还留着一条
+> 已成死配置的 permitAll 规则，不要被它误导（那是历史遗留，端点不存在）。
+> 这一类"文档写了、实现没有"的路径最坑：调用方会拿到 `40001 接口不存在`，
+> 却以为是自己参数写错了。
+
+> ⚠️ `/ranking` 与 `/{id}` 的冲突由 Spring 的"字面量优先"规则解决（`/me` 同理），
+> 不需要也不应该把 `{id}` 放宽成字符串匹配。
 
 ### 上传 `/api/uploads`
 
@@ -934,14 +1127,66 @@ score = (likeCount * 3 + commentCount * 5 + viewCount * 0.1)
 | DELETE | `/{id}/collect` | 取消收藏 |
 | POST | `/{id}/accept/{commentId}` | 采纳答案（仅楼主）|
 
-### 评论 `/api/posts/{postId}/comments`
+### 站点统计 `/api/stats`（V0.4 补充）
 
 | 方法 | 路径 | 说明 |
 |---|---|---|
-| GET | `/` | 评论列表（树形）|
-| POST | `/` | 发表评论 |
-| DELETE | `/{commentId}` | 删除评论 |
-| POST | `/{commentId}/like` | 评论点赞 |
+| GET | `/` | 站点汇总统计（游客可读）：`boardCount` / `boardPostCount` / `tagCount` / `questionCount` / `questionSolvedCount` / `questionUnsolvedCount` —— 一次请求、同一时刻、口径恒定 |
+
+> **为什么要有它**：板块 / 标签 / 问答 / 首页四处此前各自"客户端拼计数" —— 问答页发 3 个请求凑 3 个数
+> （还导致"共 N 个提问"随 tab 漂移：切到「待解决」会显示成待解决数）、标签页把热门榜长度当总数（上限 50）、
+> 首页"个技术标签"是热门榜长度（上限 20）。服务端聚合给出唯一口径：`questionCount ≡ questionSolvedCount
+> + questionUnsolvedCount` 恒成立，`boardPostCount` 与板块卡片数字是同一套账。
+> 实现见 `SiteStatsServiceImpl`（只读事务保证三条查询同一快照；**刻意不缓存** —— 这些数字的用途就是"当场可信"）。
+> 验收：`verify-v04-stats.py`（23 项：DB 真值对账 + 跨接口一致 + 发帖删帖计数随动 + 边界）。
+
+### 草稿箱 `/api/drafts`（V0.4 / M4-15）
+
+| 方法 | 路径 | 说明 |
+|---|---|---|
+| GET | `/` | 草稿箱列表（需登录；摘要不含正文，按更新时间倒序，带纯文本预览 `excerpt`）|
+| GET | `/{scope}` | 读取一条草稿（含正文）。没有草稿时 `data` 为 `null` —— 编辑器首次进入是常态，不是错误 |
+| PUT | `/` | 保存草稿（upsert：同 scope 覆盖，靠 `uk_user_scope` 唯一键兜底）。请求体除 `scope` 外均可空；按用户限流（`codelkup.rate-limit.draft-per-hour`，默认 240 次/小时）|
+| DELETE | `/{scope}` | 删除草稿（物理删除、幂等：不存在也返回成功）|
+
+**scope 的两种形态**（前端 `useDraft` 的草稿身份、`t_draft.scope`、本接口三处同源）：
+
+| scope | 含义 |
+|---|---|
+| `new` | 新建稿（编辑器 `/publish`）|
+| `edit:<postId>` | 某帖的编辑稿（编辑器 `/posts/:id/edit`）|
+
+> `edit:` 里的冒号是 URI 路径段的合法字符（RFC 3986 pchar），直接拼在路径里即可。
+> 所有接口都要求登录，且 Service 层查询一律带 `user_id` —— 草稿只有"本人可见"这一个权限维度
+> （读别人的 scope 拿到 `null`，删别人的草稿受影响行数为 0，天然免疫水平越权）。
+
+**响应字段**：`scope / title / content / boardId / type / tags(数组) / updateTime(格式化时间) / updateTimeEpoch`。
+
+> `updateTimeEpoch` 由服务端把库里的 `update_time` 换算成 epoch 毫秒（与 `updateTime` 同一刻）。
+> 它存在的原因是：前端要把"服务端这份"与"本地 localStorage 那份"比新旧
+> （规则见 `useDraft.pickNewerDraft`，5 秒容差），而 `updateTime` 字符串不带时区标记 ——
+> 按前端本地时区解析会在非 +08 环境整体偏移，比出一个错误结论。
+
+**与本地草稿的关系**：`localStorage` 仍是本机写前日志（5 秒落盘、读写零延迟）；
+服务端这份是跨设备副本，编辑器每 15 秒最多推一次。两者是叠层不是替代 ——
+编辑器路由本身要求登录（游客访问 `/publish` 会被守卫拦到登录页），所以正常情况下两侧都在；
+真正的降级路径是**服务端请求失败 / 限流**：此时本地链路照常工作，用户不会被迫停止写作
+（会话中途失效同理：推送 401 被静默吞掉，本地继续存，下一次登录后再推上去）。
+接口在 api 层全部走**静默请求**（失败不弹全局提示），由调用方决定怎么呈现失败。
+
+### 评论 `/api/posts/{postId}/comments` 与 `/api/comments/{commentId}`
+
+| 方法 | 路径 | 说明 |
+|---|---|---|
+| GET | `/api/posts/{postId}/comments` | 评论列表（树形）|
+| POST | `/api/posts/{postId}/comments` | 发表评论 |
+| DELETE | `/api/comments/{commentId}` | 删除评论 |
+| POST | `/api/comments/{commentId}/like` | 评论点赞 |
+| DELETE | `/api/comments/{commentId}/like` | 取消评论点赞 |
+
+> ⚠️ **按实现更正（M3-2 实测发现）**：删除与点赞挂在自己的资源路径 `/api/comments/{commentId}` 下，
+> **不是** `/api/posts/{postId}/comments/{commentId}`（此前文档写成了后者，实际调用会拿到 `40001 接口不存在`）。
+> 前端 `api/interaction.ts` 用的是 `del('/comments/' + id)`，与上表一致。
 
 ### Feed `/api/feed`
 
@@ -962,10 +1207,211 @@ score = (likeCount * 3 + commentCount * 5 + viewCount * 0.1)
 
 | 方法 | 路径 | 说明 |
 |---|---|---|
-| GET | `/` | 通知列表 |
-| GET | `/unread-count` | 未读数 |
-| PUT | `/{id}/read` | 标记已读 |
-| PUT | `/read-all` | 全部已读 |
+| GET | `/` | 通知列表（`onlyUnread` 只看未读；`type` 按类型分组筛选，可 `type=1,2` 或重复键）|
+| GET | `/unread-count` | 未读数（顶栏红点）|
+| GET | `/unread-counts` | 各类型未读数（通知中心分组角标，只返回有未读的类型）|
+| POST | `/{id}/read` | 标记已读（仅能标记自己的）|
+| POST | `/read-all` | 全部已读 |
+
+> ⚠️ 上表两处按**实现**更正：标记已读用的是 `POST` 而不是 `PUT`（与 `@PostMapping` 一致）；
+> `type` 是 V0.4 新增的分组参数，方括号写法（`type[]=1`）会被 Spring 静默忽略，别用。
+
+### 实时通道 `/api/auth/sse-ticket` + `/api/notifications/stream`（V0.3 / M3-1）
+
+| 方法 | 路径 | 鉴权 | 说明 |
+|---|---|---|---|
+| POST | `/api/auth/sse-ticket` | 登录态 | 换取一次性 ticket（60 秒有效、消费即作废）。按用户限流（`codelkup.rate-limit.sse-ticket-per-hour`，默认 120/小时）|
+| GET | `/api/notifications/stream?ticket=` | ticket | SSE 长连接：连上先推一次当前未读数，之后未读数每次变化再推 |
+
+**事件契约**（前端 `EventSource` 侧）：
+
+| 类型 | 线格式 | 含义 |
+|---|---|---|
+| 事件 | `event: unread` + `data: {"count": 3}` | 未读数变化（落库 / 标记已读 / 全部已读都会触发）|
+| 心跳 | `:ping`（注释帧） | 默认 25 秒一次；注释按 SSE 规范会被浏览器忽略，**不会触发前端 handler** |
+
+**为什么是 ticket 而不是 token**（ADR-8）：`EventSource` 无法自定义请求头，而 token 放进 query
+会落进浏览器历史与 nginx 访问日志。ticket 是"登录态 → 60 秒短期凭证"的兑换：
+
+> - 存储：Redis `codelkup:sse:ticket:{ticket}` → `userId`，TTL 60 秒；
+> - 消费：`GETDEL`（读取即删除）—— 用"先 GET 再 DEL"会在两条命令之间有窗口，并发下可能一票两用；
+> - 失败即作废：ticket 无效 / 已消费 / 已过期一律 `40101`，前端不必区分原因，统一按"实时通道不可用"处理。
+
+> ⚠️ **两个端点的"归属"与路径不一致，是有意的**：`/api/auth/sse-ticket` 由
+> `SseController`（通知模块）实现。若把它写进 `AuthController`（user 模块），就产生
+> `user → notification` 依赖，而通知模块已依赖 user（查昵称），包依赖成环。
+> 与 M2-8 的 `/api/users/me/collections` 同一条判据：成环的代价大于"路径与包名不整齐"。
+
+> ⚠️ **`/stream` 不套 `Result` 封装**：它返回 `text/event-stream` 长连接，不是一次性 JSON；
+> 失败时仍是全局约定的 `200 + 40101` JSON，但 `EventSource` 解析不了，前端只会看到 `onerror`
+> —— 所以前端**不要**试图从流里读错误码。
+
+**降级与边界**：
+- Redis 不可用时**签票直接报错**（`50003`）而不是发一张假票：假票连不上，只会让前端白跑一轮重连；报错才能让它立刻切轮询兜底。
+- 无连接时 `notifyUnread` 是一次空遍历，不查库 —— 走轮询的用户不该为 SSE 付成本。
+- 单用户并发连接上限 `codelkup.sse.max-connections-per-user`（默认 5）：超出时**关掉一个旧连接**而不是拒绝新连接（多标签场景下"新的这个能用"更重要）。
+- 服务端连接超时 `codelkup.sse.timeout-ms`（默认 30 分钟）：到点自动关闭让前端重连，防半开连接长期占资源。
+- 响应头带 `X-Accel-Buffering: no`：告诉反向代理别缓冲（nginx 侧另有对应配置，见下）。
+- **单实例口径**：注册表是进程内 Map，多实例部署下跨实例不互通（ALIGNMENT 已明确本轮不做，扩展点是 Redis pub/sub）。
+
+**前端行为**（`useNotificationStream.ts`，接线在 `AppLayout`）：
+
+| 场景 | 行为 |
+|---|---|
+| 登录 | 先拉一次 `/unread-count` 垫底 → 换 ticket → 建连（连上会立刻收到一次 `unread` 快照） |
+| 收到 `unread` | 把**绝对值**写进 store（`setUnread`，不是增量：增量与本地乐观更新叠加会算重复） |
+| 收到 `unread`（正在通知中心） | 通知**列表**做 800ms 防抖静默重拉（store 的 `pushedAt` 序号只认推送、不认本地已读操作）：停在第 1 页时新通知直接出现，翻页时只校准类型角标 —— 列表实时性不再只靠角标 |
+| 连接出错 | 主动 `close()` 掐掉浏览器自带的自动重连（它用的是同一张已消费的 ticket，必然无限失败）→ 换**新 ticket** 按 `1s / 2s / 4s…`（带半抖动）重连 |
+| 连续失败 3 次 | 降级为每 20 秒轮询 `/unread-count`（进入时先立即拉一次）；此后不再后台重试 SSE，下次刷新页面重新尝试 |
+| 切回标签页（降级模式） | 立刻补拉一次，避免回来的人看到过期角标 |
+| 退出登录 | 关闭连接、清定时器、未读数清零（不把上个账号的数字带给下一个人） |
+
+**nginx 侧配置**（`codelkup-frontend/nginx.conf` 的 `location = /api/notifications/stream`）：
+`proxy_buffering off` + `proxy_read_timeout 3600s` + `proxy_http_version 1.1` 且清空 `Connection` + `gzip off`。
+少任何一条都会表现为"事件延迟几十秒才到 / 连上没反应"——这类故障**在本地 vite 代理下复现不出来**，
+只有跑起生产 compose 栈才暴露（与 nginx 静态资源那两处 `^~` 是同一类"只有真栈才暴露"的坑）。
+
+### AI `/api/ai`（V0.3）
+
+| 方法 | 路径 | 说明 |
+|---|---|---|
+| POST | `/similar-questions` | 相似问题提示（M3-5）：输入正在写的标题 → 站内最像的 3 条讨论，**不调用 LLM**、毫秒级返回。需登录；按用户限流（`codelkup.rate-limit.similar-per-hour`，默认 300/小时）|
+| POST | `/ask` | RAG 问答（M3-6）：检索 top-k → LLM 依据片段作答并标注引用。需登录；按用户限流（默认 10/小时）+ 全站日预算 + 问题指纹缓存三重闸门 |
+| POST | `/summarize/{postId}` | 长帖 TL;DR（M3-7）：正文剥离 Markdown 并截断后交 LLM 生成 3~5 条要点。与 `/ask` **共用**用户限流与日预算；按"截断后正文哈希"缓存 |
+
+**`/ask` 请求 / 响应**：
+
+```json
+// 请求（问题最长 200 字）
+{ "question": "虚拟线程和平台线程有什么区别？" }
+
+// 响应 data
+//   answer      —— 答案纯文本（不走 v-html）
+//   citations   —— 结构化引用，前端据 postId 生成站内链接
+//   degraded    —— 是否降级（前端据此显示"仅检索结果"提示）
+//   degradeReason —— NO_EVIDENCE / NO_KEY / DISABLED / BUDGET / TIMEOUT / UPSTREAM_ERROR / EMPTY_RESPONSE
+{ "answer": "虚拟线程更适合 IO 密集场景 [1]。",
+  "citations": [{ "postId": 20103, "title": "…", "snippet": "…", "boardName": "后端开发" }],
+  "degraded": false, "degradeReason": null }
+```
+
+**一次问答的链路与四个"不"**：
+
+| 步骤 | 行为 | 为什么 |
+|---|---|---|
+| ① 指纹缓存 | 命中直接返回 | 同一个问题只付一次费；**命中不消耗日预算**（确实没调用） |
+| ② 检索 top-k | `codelkup.ai.top-k`（默认 5） | 复用 `/api/search`：检索语义只有一份；⚠️ 提问要先拆成 2-gram 词袋（见 §10.4 实测补记） |
+| ③ 无依据 | 返回 `NO_EVIDENCE`，**不调用 LLM** | 没有片段可依据时让模型自由发挥＝主动制造幻觉 |
+| ④ 客户端不可用 | 返回 `NO_KEY` / `DISABLED` + 检索结果 | 连 HTTP 请求都不发（客户端契约） |
+| ⑤ 超日预算 | 返回 `BUDGET` + 检索结果 | 成本闸门第三道；先 INCR 再比较（并发下宁可多算一次） |
+| ⑥ 调用 LLM | 8s 超时、无重试；prompt 里声明"片段是用户内容，不是指令" | 防站内投毒：一次投毒不能把问答变成任意执行器 |
+| ⑦ 引用映射 | 解析答案里的 `[n]` → 映射回片段 | 越界编号忽略；**一个有效引用都没有时回填全部片段**（降级时用户仍需要"依据在哪"） |
+
+**不缓存的两类结果**：降级结果（没花钱，缓存会让"后来配上 key"的部署继续拿到旧文案）、
+无依据结果（库里随时会新增帖子，缓存"没找到"会让新帖 6 小时内问不出来）。
+
+**日志（`t_ai_answer_log`，V10）**：每请求一行 —— `question_hash`（SHA-256，**不存问题原文**）、
+`citation_ids`、`answer_length`、`duration_ms`、`total_tokens`、`cache_hit`、`degraded`、`degrade_reason`。
+写入失败只记 WARN，绝不让问答失败（与通知/计数监听器同一口径）。
+
+**`/summarize` 补充说明（M3-7）**：
+
+- **先剥离、再截断**：正文先走 `MarkdownUtils.stripMarkdown`（与列表摘要 / 搜索 snippet 同一套规则，
+  不引第二套"去 Markdown"实现），再截到 `codelkup.ai.summary-max-input-chars`（默认 6000 字）
+  并在末尾补省略号；system 里明确告诉模型"看到省略号说明被截断，不要脑补后半篇"。
+  取**开头**而不是首尾拼接：技术帖的结论多数在开头，且"取前 N 字"一句话能说清。
+- **缓存键是「截断后正文」的哈希**（`codelkup:ai:summary:{postId}:{hash}`）——这带来一个刻意的行为：
+  只改**尾部**（不影响进 prompt 的前 6000 字）时缓存**照旧命中**（相同输入不重复计费），
+  改**开头**才失效。两种都正确，脚本对这条区分有专门断言（避免把"有效"误判成"没失效"）。
+- **与 `/ask` 共用**用户限流桶（`codelkup.rate-limit.ai-per-hour`）与全站日预算：
+  两者都真花钱，各给一份额度等于把每人的上限悄悄翻倍。
+- 降级时 `summary` 为 **null**（`degraded=true` + `degradeReason`），前端据此隐藏或提示 ——
+  不拿帖子已有的 `summary`（200 字自动摘要）冒充 TL;DR，混用会让用户以为 AI 生效了。
+- 帖子不存在 / 已删除 / 未发布 → 一律 `40402`（与详情接口同一口径，不区分"没有"与"不可见"）。
+- 正文剥完为空（纯代码块 / 纯图片帖）→ `NO_CONTENT`（不调用、不花钱）。
+
+**前端落点（M3-8）**：
+
+| 位置 | 组件 | 说明 |
+|---|---|---|
+| 帖子详情页·正文**上方** | `PostTldr.vue` | 「✦ AI 摘要 ▼」折叠区：**点了才请求**（自动摘要会让每次浏览都可能触发一次花钱的调用）；摘要按行渲染成列表 + "AI 生成，可能不准确"脚注 |
+| 顶栏（任意页面） | `AiAnswerPanel.vue` | 「问 Codelkup」抽屉：提问 → 答案分段渲染（文本 + 可点引用角标 `[1][2]`）+ 「依据 N 条站内讨论」清单；点引用跳对应帖子并收起抽屉。未登录点入口 → 引导登录并带 redirect（与「创作」同口径） |
+| 发帖编辑器·标题**下方** | `PostEditorView.vue`（M3-9 补） | 「站内已有相似讨论：」提示卡（最多 3 条，标题 + 板块）：打字去抖 800ms 调 `/ai/similar-questions`，**只在新建稿**问（编辑稿问出来的一定是它自己）、**静默失败**（拿不到就当没有）、**同文本不重复问**；点条目 **`target="_blank"` 开新标签页** —— 当前页还写着草稿，绝不能被这次点击带走 |
+
+**渲染边界（与全站 D4 一致）**：答案**不拼 HTML** —— `utils/ai.ts` 的 `parseAnswerSegments` 把答案切成
+"文本段 / 引用段"数组，模板 v-for 渲染，全程没有 `innerHTML`/`v-html`（`verify-v03-ai-frontend.mjs` 里
+有一条静态断言专门盯这一点：剥掉注释后组件代码里不得出现这两个词）。
+
+**降级怎么显示**：`utils/ai.ts` 的 `aiDegradeText(reason)` 是唯一口径（NO_KEY/DISABLED → "AI 暂未启用（未配置模型密钥）"、
+BUDGET → "今日 AI 额度已用完"、TIMEOUT/NO_EVIDENCE/其余各有说法），用 **warning 令牌**渲染（是"暂时没有"，不是"出错"）；
+摘要降级时 `summary` 为 null，面板只显示这句提示，**不拿帖子自带的 200 字摘要冒充**。
+真失败（如 42901 限流）才走失败态：面板给"暂时没能拿到回答（具体原因见上方提示）" + 「重试」，
+具体原因由统一拦截器的提示条给出（不在这层猜原因）。
+
+**请求 / 响应**：
+
+```json
+// 请求：标题是用户内容，所以走 POST body 而不是 query
+//（不落访问日志、也不被中间层按 URL 缓存 —— 边写边问时"改一个字拿到上一版"最难查）
+{ "title": "虚拟线程在 IO 密集场景的实测" }
+
+// 响应 data：最多 3 条；不足 2 字返回空数组（code 0，不是错误）
+[{ "postId": 20103, "title": "为什么要给上传接口加「配额」…",
+   "snippet": "命中附近的一段纯文本", "boardName": "后端开发" }]
+```
+
+> **取数是两路合并**（判据与实测记录见 `SimilarQuestionService` / `PostMapper.selectByTitlePrefix`）：
+> ① **标题前缀探测**（`title LIKE '输入%'`，取 5 条）——"标题最像"的一类必须保证进得来；
+> ② **通用检索兜底**（与 `/api/search` 同一套），候选按"与标题的最长公共前缀"重排后补齐，按 id 去重、封顶 3 条。
+>
+> ⚠️ 为什么不能只靠检索 + 重排：`BOOLEAN MODE` 是 **OR 语义**，`java` 这类常见词会把候选池打满 ——
+> 实测（2026-09-26）查 `java virtual thread` 时，一篇标题就叫这个的新帖**没能进前 20**，
+> 首位被两篇无关老帖占住。**重排救不了"没进候选池"的帖子**。
+> 也不改 `/api/search` 的排序语义：那有自己的契约与 Sprint 4 的 84 条断言，为一个提示接口动它不划算 ——
+> 检索侧只**新增**了 `byTitlePrefix` 一个方法，原有 SQL 一行未改。
+>
+> 前缀命中的条目预览用 `summary`（命中在标题上，"正文里关键词附近的那一段"没有意义）；
+> 兜底条目的预览用检索算出的 `snippet`。
+
+### 举报与审核 `/api/reports` + `/api/admin/reports`（V0.5 / M5）
+
+| 方法 | 路径 | 说明 |
+|---|---|---|
+| POST | `/api/reports` | 提交举报（登录 + 用户级限流 20 次/小时/用户）|
+| GET | `/api/admin/reports` | 审核队列（仅管理员；`status` 0待处理 1已驳回 2已删除内容；`page`/`size`）|
+| GET | `/api/admin/reports/pending-count` | 待处理数（管理端角标）|
+| POST | `/api/admin/reports/{id}/handle` | 处理（`action=dismiss\|delete_target` + `note` ≤200 字）|
+
+```
+// POST /api/reports
+{ "targetType": 1,                  // 1帖子 2评论
+  "targetId": 20103,
+  "reason": "SPAM",                 // SPAM / ABUSE / ILLEGAL / OTHER（**字符串**：发数字会被判 40001）
+  "detail": "正文里带推广链接" }      // 可选，≤200 字
+// 响应 data：{ "id": 12, "status": 0 }
+
+// GET /api/admin/reports?status=0 → records[i] 关键字段
+{ "id": 12, "targetType": 1, "targetId": 20103, "targetPostId": null,
+  "targetTitle": "为什么要给上传接口加「配额」…", "targetExcerpt": "…",
+  "targetAuthorId": 178, "targetAuthorNickname": "演示账号", "targetExists": true,
+  "reportedCount": 2,               // 同一目标被举报的总次数（含已处理的举报）
+  "reporterId": 183, "reporterNickname": "路人乙",
+  "reason": "SPAM", "detail": "…", "status": 0, "createTime": "2026-09-27T01:05:00",
+  "handledBy": null, "handledByName": null, "handledAt": null, "handleNote": null }
+
+// POST /api/admin/reports/12/handle
+{ "action": "delete_target", "note": "确认广告，删除" }
+// 响应 data：{ "id": 12, "status": 2, "closedSiblings": 1 }   ← 顺带关闭的同目标待处理举报数
+```
+
+> **语义要点**（实现口径见 `ReportService` 与 TASKS 备注 34）：
+> - **幂等**：同一人对同一目标第二次举报返回 **40909**（靠唯一索引 `uk_reporter_target`，不是"先查再写"，并发下不会插出第二行）；
+> - **不能举报自己** → 40001；目标不存在（含已删/已封禁的帖子）→ 40402 / 40403；
+> - **已处理不能再处理** → **40910**（状态流转用条件更新"认领"，并发下另一个管理员抢先处理也会撞到它，而不是双方都成功）；
+> - **`delete_target` 复用现有删除路径**：副作用与作者/管理员直接删完全一致（板块计数、标签引用数、Redis 计数清理、帖子 `status` 置为"已封禁"），并**顺带关闭同一目标的其它待处理举报**（备注写「同目标内容已删除，自动关闭」），`closedSiblings` 告诉前端本次一共关掉几条；
+> - **不通知任何人**：不通知被举报人（处理前通知 = 打草惊蛇），也不给举报人处理结果（避免把举报变成打卡任务）—— 理由见备注 34；
+> - **记录不删**：已处理的行保留在库里（审计材料 ——"这条内容当初是谁以什么理由要求删除的、谁批准的"），队列靠 `status` 过滤而不是靠删数据"清理"；
+> - **`targetExists=false`** 表示目标已被删/被封：`targetTitle / targetExcerpt / targetAuthorNickname` 都会是空，前端应显示「内容已删除」而不是留白。
 
 ### 管理 `/api/admin`
 
@@ -974,6 +1420,7 @@ score = (likeCount * 3 + commentCount * 5 + viewCount * 0.1)
 | GET/PUT/DELETE | `/posts/**` | 帖子管理（审核/加精/置顶/删）|
 | GET/PUT | `/users/**` | 用户管理（禁言/封禁/角色）|
 | GET/POST/PUT/DELETE | `/boards/**` | 板块管理 |
+| GET/POST | `/admin/reports**` | 举报审核队列（V0.5 / M5，见上一节）|
 
 ---
 

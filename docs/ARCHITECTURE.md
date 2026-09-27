@@ -1,7 +1,7 @@
 # ARCHITECTURE — Codelkup V0.3（6A 阶段 2 产物）
 
-> 日期：2026-09-25 · 状态：**待批准（阶段 4 未过，不得编码）**
-> 配套产物：[ALIGNMENT.md](./ALIGNMENT.md)（目标与验收）、[TASKS.md](./TASKS.md)（原子任务）
+> 日期：2026-09-25（2026-09-27 状态同步）· 状态：**已批准**（阶段 4：[APPROVAL.md](./APPROVAL.md)）· **已按本蓝图执行并完成终检**（阶段 5/6：[ASSESS.md](./ASSESS.md)）
+> 配套产物：[ALIGNMENT.md](./ALIGNMENT.md)（目标与验收）、[TASKS.md](./TASKS.md)（原子任务）、[APPROVAL.md](./APPROVAL.md)（批准）、[ASSESS.md](./ASSESS.md)（终检）
 > 本文只描述**本轮增量**与决策理由，不重述既有架构（见 docs/DEV-DOC-codelkup.md）。
 
 ---
@@ -142,7 +142,7 @@ sequenceDiagram
 
 | # | 决策 | 备选 | 理由 |
 |---|---|---|---|
-| ADR-1 | AI 客户端用 Spring 6.1 自带 `RestClient` 直连 OpenAI 兼容端点，抽象为 `AiClient` 接口 | 引入 Spring AI starter | 零新增依赖、超时/重试/降级完全可控；接口留作替换点，想体现 Spring AI 时可在同一接口下加第二实现，业务层不动 |
+| ADR-1 | AI 客户端用 Spring 6.1 自带 `RestClient` 直连 OpenAI 兼容端点，抽象为 `AiClient` 接口 | 引入 Spring AI starter | 零新增依赖、超时/重试/降级完全可控；接口留作替换点，想体现 Spring AI 时可在同一接口下加第二实现，业务层不动（**M3-11 已落地**：`codelkup.ai.impl=spring-ai` 切换，默认仍是本实现；两个实现跑同一套 87 项断言全绿，见 DEV-DOC §10.6） |
 | ADR-2 | 本轮检索沿用 ngram 全文检索 + 标题加权，不上向量库 | 向量检索（ES/pgvector/内存余弦） | 约束"不新增中间件"；1 万帖量级够用；V0.4 再评估（embedding 表 + Java 侧余弦是唯一可行路径） |
 | ADR-3 | 实时通道用 SSE（`SseEmitter`） | WebSocket / 长轮询 | 通知是单向的，SSE 无需协议升级与自定义心跳协议；Spring MVC 原生支持；代价是占用连接（单实例可控） |
 | ADR-4 | 图片压缩放前端（Canvas → WebP，长边 ≤1600），后端只做校验与存储 | 后端 Java 压缩 | 避免引入 native 编码依赖（ImageIO 不支持 WebP 写出）；顺带省流量；后端仍是安全边界 |

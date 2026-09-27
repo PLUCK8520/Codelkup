@@ -95,6 +95,8 @@ Git          ✅ 2.55.0.windows.3
 
 ### 2.2 待执行的 3 个准备动作
 
+> ⚠️（2026-09-27 状态同步）以下三项准备动作**均已完成**（Redis 容器 `codelkup-redis`、数据库与专用账号自 Sprint 0 起就在使用）；保留原文作为当时的执行记录。
+
 **动作 1 — 起 Redis（Docker）**
 ```bash
 docker run -d --name codelkup-redis -p 6379:6379 \

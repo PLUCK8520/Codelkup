@@ -1,7 +1,7 @@
 # ALIGNMENT — Codelkup V0.3（6A 阶段 1 产物）
 
-> 日期：2026-09-25 · 状态：**待批准（阶段 4 未过，不得编码）**
-> 配套产物：[ARCHITECTURE.md](./ARCHITECTURE.md)、[TASKS.md](./TASKS.md)
+> 日期：2026-09-25（2026-09-27 状态同步）· 状态：**已批准**（阶段 4：[APPROVAL.md](./APPROVAL.md)）· **已执行并按 S1~S11 完成终检**（阶段 5/6：[ASSESS.md](./ASSESS.md)）
+> 配套产物：[ARCHITECTURE.md](./ARCHITECTURE.md)、[TASKS.md](./TASKS.md)、[APPROVAL.md](./APPROVAL.md)（批准）、[ASSESS.md](./ASSESS.md)（终检）
 > 与既有文档的关系：本文只界定 V0.3 的范围与验收标准，不重述 Sprint 0~5 的历史结论（见 docs/PLAN-codelkup.md、docs/DEV-DOC-codelkup.md）。
 
 ---

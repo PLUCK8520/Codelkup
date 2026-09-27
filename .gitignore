@@ -3,8 +3,13 @@
 # ============================================================
 
 # ---------- 环境变量（含密码与密钥，绝不提交）----------
+# 用通配而不是逐个点名（第三轮审计）：.env / .env.local / .env.production / .env.bak
+# 以及 deploy/ 下同名前缀的变体一律忽略；只有模板（*.example）是交付物，显式放行。
 .env
-.env.local
+.env.*
+!.env.example
+deploy/.env*
+!deploy/.env.production.example
 
 # ---------- 构建产物 ----------
 target/
@@ -15,6 +20,8 @@ node_modules/
 # ---------- 运行期数据 ----------
 # 上传的头像等文件属于"运行期数据"，不该进版本库
 uploads/
+# 数据库备份（deploy/backup.py 的默认输出目录）同理：是运行期数据，绝不进版本库
+backups/
 *.log
 logs/
 
