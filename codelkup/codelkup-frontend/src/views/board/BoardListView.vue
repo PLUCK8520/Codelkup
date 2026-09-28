@@ -269,14 +269,10 @@ onMounted(() => load(true))
   gap: var(--space-3);
   height: 100%;
   padding: var(--space-4);
-  /* 复用全局 .card 的玻璃语言（底色 + 发丝边 + 顶边内高光 + 模糊）：
-     与帖子卡、侧栏卡保持一致，不另起一套观感 */
+  /* 白纸卡 + 发丝边：与帖子卡、侧栏卡保持一致，不另起一套观感 */
   background: var(--color-card);
-  border: 1px solid var(--glass-border);
+  border: 1px solid var(--color-border-hairline);
   border-radius: var(--radius-lg);
-  box-shadow: var(--glass-highlight);
-  backdrop-filter: var(--glass-blur);
-  -webkit-backdrop-filter: var(--glass-blur);
   transition: background var(--transition-fast), border-color var(--transition-fast),
     transform var(--transition-fast);
 }

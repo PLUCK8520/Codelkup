@@ -27,9 +27,15 @@ import 'element-plus/dist/index.css'
       这里只需要 latin 子集。
 
    只引入实际用到的字重，避免打包无用的字形：
-     Inter 400/500/600/700 —— 正文 / 次级 / 小标题 / 粗体
-     JetBrains Mono 400/500/600 —— 代码块
+     IBM Plex Sans 400/500/600/700 —— 拉丁字母与数字（v5 起的界面主字体，
+       IBM 为工程场景设计，机械感与横向节奏比 Inter 更有"工作台"气质）
+     Inter 400/500/600/700 —— 保留为回退（万一 Plex 子集未加载）
+     JetBrains Mono 400/500/600 —— 代码块 / 编号 / 数字
    ============================================================ */
+import '@fontsource/ibm-plex-sans/latin-400.css'
+import '@fontsource/ibm-plex-sans/latin-500.css'
+import '@fontsource/ibm-plex-sans/latin-600.css'
+import '@fontsource/ibm-plex-sans/latin-700.css'
 import '@fontsource/inter/latin-400.css'
 import '@fontsource/inter/latin-500.css'
 import '@fontsource/inter/latin-600.css'

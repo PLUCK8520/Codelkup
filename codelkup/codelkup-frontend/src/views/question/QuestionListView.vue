@@ -189,7 +189,11 @@ watch(
       <span class="result-count">{{ statsText }}</span>
     </div>
 
-    <PostListSkeleton v-if="loading" :count="5" />
+    <!-- 骨架包进 .post-list 并随它双列化（与首页同一口径，
+         避免"单列骨架 → 双列内容"在数据到达时跳版） -->
+    <div v-if="loading" class="post-list">
+      <PostListSkeleton :count="6" />
+    </div>
 
     <el-alert v-else-if="error" type="error" :title="error" :closable="false" show-icon>
       <el-button text type="primary" @click="load">重试</el-button>
@@ -230,7 +234,7 @@ watch(
 
 <style scoped>
 .question-page {
-  max-width: var(--container-narrow);
+  max-width: var(--container-list);
 }
 
 .page-head {
@@ -238,9 +242,8 @@ watch(
   align-items: flex-start;
   justify-content: space-between;
   gap: var(--space-4);
-  margin-bottom: var(--space-5);
-  padding-bottom: var(--space-4);
-  border-bottom: 1px solid var(--color-border-subtle);
+  margin-bottom: var(--space-4);
+  /* 不再画分隔线：下方的 .toolbar 已有一条，浅色下双线很显眼 */
 }
 
 .page-title {
@@ -270,24 +273,27 @@ watch(
   gap: var(--space-1);
 }
 
+/* tab 用**下划线式**（与首页同一口径）：状态是导航不是按钮，
+   实心/胶囊底会和内容抢注意力；当前项靠一条 2px 主色线标记。 */
 .sort-tab {
   padding: var(--space-1) var(--space-3);
   font-size: var(--text-sm);
   color: var(--color-muted-foreground);
   background: none;
   border: none;
-  border-radius: var(--radius-sm);
-  transition: all var(--transition-fast);
+  border-radius: 0;
+  transition:
+    color var(--transition-fast),
+    box-shadow var(--transition-fast);
 }
 
 .sort-tab:hover {
   color: var(--color-foreground);
-  background: var(--color-muted);
 }
 
 .sort-tab.active {
   color: var(--color-foreground);
-  background: var(--color-muted);
+  box-shadow: inset 0 -2px 0 var(--color-accent);
   font-weight: 500;
 }
 
@@ -297,9 +303,17 @@ watch(
   font-variant-numeric: tabular-nums;
 }
 
+/* ★ 双列卡片：与首页同一口径（两列、同行等高、顺序 1,2 / 3,4） */
 .post-list {
-  display: flex;
-  flex-direction: column;
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--space-3);
+}
+
+/* 骨架随双列走（组件根是单列 flex，这里覆写为同规格 grid） */
+.post-list :deep(.skeleton-list) {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: var(--space-3);
 }
 
@@ -307,6 +321,14 @@ watch(
   display: flex;
   justify-content: center;
   margin-top: var(--space-6);
+}
+
+@media (max-width: 1024px) {
+  /* 双列在窄屏每列太窄，回单列（与首页同一断点） */
+  .post-list,
+  .post-list :deep(.skeleton-list) {
+    grid-template-columns: 1fr;
+  }
 }
 
 @media (max-width: 640px) {

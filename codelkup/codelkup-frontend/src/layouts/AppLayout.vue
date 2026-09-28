@@ -8,6 +8,7 @@
 import { onBeforeUnmount, ref, watch } from 'vue'
 import { useRoute, useRouter, type RouteLocationRaw } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
+import type { InputInstance } from 'element-plus'
 import { useAuthStore } from '@/stores/auth'
 import { useNotificationStore } from '@/stores/notification'
 import { notificationApi } from '@/api/notification'
@@ -82,7 +83,24 @@ watch(
   { immediate: true },
 )
 
-onBeforeUnmount(() => notificationStream.stop())
+/* ⌘K / Ctrl+K 聚焦搜索（v5 轻量版命令面板）。
+   快捷键是"看不见的功能"，藏起来等于没有：输入框里放了 ⌘K 键帽提示，
+   这里负责真正接线；就地出结果/跳转的完整命令面板留给下一阶段。 */
+const searchInputRef = ref<InputInstance>()
+
+function onGlobalKeydown(e: KeyboardEvent) {
+  if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'k') {
+    e.preventDefault()
+    searchInputRef.value?.focus()
+  }
+}
+
+window.addEventListener('keydown', onGlobalKeydown)
+
+onBeforeUnmount(() => {
+  notificationStream.stop()
+  window.removeEventListener('keydown', onGlobalKeydown)
+})
 
 async function onLogout() {
   try {
@@ -168,10 +186,16 @@ function onAskAi() {
         <!-- Logo -->
         <router-link :to="{ name: 'home' }" class="brand">
           <span class="brand-mark" aria-hidden="true">
-            <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor"
-                 stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
-              <polyline points="16 18 22 12 16 6" />
-              <polyline points="8 6 2 12 8 18" />
+            <!-- 提炼版标识（2026-09-28）：蓝底由 .brand-mark 提供，这里只画
+                 斜切折带与尖括号（currentColor → 随 --color-on-accent） -->
+            <svg viewBox="0 0 32 32" width="30" height="30" aria-hidden="true">
+              <path d="M32 5 V17 L17 32 H5 Z" fill="currentColor" opacity="0.16" />
+              <path d="M0 27 L27 0 H32 V5 L5 32 H0 Z" fill="currentColor" opacity="0.10" />
+              <g fill="none" stroke="currentColor" stroke-width="3"
+                 stroke-linecap="round" stroke-linejoin="round">
+                <polyline points="10.5 9.5 17.5 16 10.5 22.5" />
+              </g>
+              <rect x="20" y="20.2" width="6.8" height="3" rx="1.5" fill="currentColor" />
             </svg>
           </span>
           <span class="brand-name">Codelkup</span>
@@ -195,6 +219,7 @@ function onAskAi() {
         <!-- 搜索 -->
         <div class="search-box">
           <el-input
+            ref="searchInputRef"
             v-model="keyword"
             :placeholder="searchPlaceholder"
             clearable
@@ -206,6 +231,10 @@ function onAskAi() {
                 <circle cx="11" cy="11" r="8" />
                 <path d="m21 21-4.35-4.35" />
               </svg>
+            </template>
+            <!-- ⌘K 键帽提示：快捷键没人知道等于没有，直接摆在输入框里 -->
+            <template #suffix>
+              <kbd class="kbd-hint">⌘K</kbd>
             </template>
           </el-input>
         </div>
@@ -349,8 +378,8 @@ function onAskAi() {
     <!-- ==================== 页脚 ==================== -->
     <footer class="app-footer">
       <div class="container footer-inner">
-        <span>Codelkup · 开发者技术社区</span>
-        <span class="footer-meta">Spring Boot 3.5 · Vue 3 · MySQL ngram 全文检索</span>
+        <span class="footer-brand"><span class="sec-num">§</span> Codelkup · 开发者技术社区</span>
+        <span class="footer-meta">V0.1.0 · Spring Boot 3.5 · Vue 3 · MySQL ngram</span>
       </div>
     </footer>
   </div>
@@ -399,24 +428,23 @@ function onAskAi() {
   color: var(--color-foreground);
 }
 
-/* 品牌标识：纯色方块 + 顶部内高光 + 一点品牌光晕。
-   ★ v3：去掉 `linear-gradient(145deg, accent, #6366f1)` 的蓝→靛双色渐变 ——
-   多色相渐变是"模板感"最强的信号之一；单一强调色 + 内高光更像品牌资产。
-   （品牌标识是全局唯一允许保留彩色光晕的地方，见 tokens.css 的说明。） */
+/* 品牌标识：蓝底白字（#2563EB + 白 = 5.2:1，对比度实测见 wcag-contrast.py）。
+   投影是"纸片轻浮"（蓝调柔影），与全站 v6 的 hover 语言一致。 */
 .brand-mark {
   display: grid;
   place-items: center;
   width: 30px;
   height: 30px;
   border-radius: var(--radius-md);
+  /* 折带是直角到边的，必须裁进圆角（否则四角露白块） */
+  overflow: hidden;
   background: var(--color-accent-solid);
-  box-shadow: var(--inset-highlight), 0 4px 16px -8px var(--color-accent-glow);
-  color: #fff;
+  color: var(--color-on-accent);
+  box-shadow: var(--shadow-lift);
   transition: box-shadow var(--transition-base), transform var(--transition-fast);
 }
 
 .brand:hover .brand-mark {
-  box-shadow: var(--inset-highlight), 0 8px 24px -10px var(--color-accent-glow);
   transform: translateY(-1px);
 }
 
@@ -441,12 +469,12 @@ function onAskAi() {
   background: var(--color-muted);
 }
 
-/* 当前项用"底部短线"标记而不是整块背景：
+/* 当前项用"底部主色线"标记而不是整块背景：
    背景块和 hover 态长得一样，用户分不清"选中"和"悬停"。
-   短线是独立的视觉通道，两种状态可以同时表达。 */
+   选中态一条 2px 线已经说清，底色交给 hover，两条视觉通道互不干扰。 */
 .nav-link.active {
   color: var(--color-foreground);
-  background: var(--color-accent-soft);
+  background: none;
 }
 
 .nav-link.active::after {
@@ -456,7 +484,6 @@ function onAskAi() {
   right: var(--space-3);
   bottom: -1px;
   height: 2px;
-  border-radius: var(--radius-full);
   background: var(--color-accent);
 }
 
@@ -476,6 +503,19 @@ function onAskAi() {
 
 .search-box :deep(.el-input__wrapper.is-focus) {
   box-shadow: 0 0 0 1px var(--color-ring) inset;
+}
+
+/* ⌘K 键帽（v5）：等宽小字 + 发丝边，像键盘上的实体键 ——
+   它同时承担"发现性"：用户看到它才知道有快捷键可用了 */
+.kbd-hint {
+  padding: 0 var(--space-1);
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  line-height: 16px;
+  color: var(--color-subtle-foreground);
+  background: var(--color-card);
+  border: 1px solid var(--color-border-hairline);
+  border-radius: var(--radius-sm);
 }
 
 .header-actions {
@@ -543,7 +583,9 @@ function onAskAi() {
   border-color: var(--color-border);
 }
 
-/* 角标用绝对定位而非行内元素：出现/消失时不会把铃铛位置推来推去 */
+/* 角标用绝对定位而非行内元素：出现/消失时不会把铃铛位置推来推去。
+   未读是"状态"，用唯一信号色（v6 起为蓝）；红色留给真正的危险操作
+   （破坏性语义一旦被日常状态占用，删除按钮就不再吓人了）。 */
 .notify-badge {
   position: absolute;
   top: -2px;
@@ -554,9 +596,9 @@ function onAskAi() {
   font-size: 10px;
   font-weight: 600;
   line-height: 16px;
-  color: var(--color-on-destructive);
+  color: var(--color-on-accent);
   text-align: center;
-  background: var(--color-destructive);
+  background: var(--color-accent-solid);
   border: 1.5px solid var(--color-background);
   border-radius: var(--radius-full);
   font-variant-numeric: tabular-nums;
@@ -650,8 +692,14 @@ function onAskAi() {
   flex-wrap: wrap;
 }
 
+/* ★ v5：页脚放**真实工程信号**（版本 + 技术栈 + 全文检索方案），等宽小字。
+   灵感来自 V2EX：把版本号、在线人数这类"真东西"直接摆上页面 ——
+   它比任何装饰都更像"这里真的有人在维护"。 */
 .footer-meta {
-  color: var(--color-border);
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  color: var(--color-subtle-foreground);
+  font-variant-numeric: tabular-nums;
 }
 
 /* ---------- 响应式：平板 / 窄屏 ----------

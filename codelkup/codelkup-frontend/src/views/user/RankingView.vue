@@ -117,7 +117,7 @@ onMounted(load)
 
 <style scoped>
 .ranking-page {
-  max-width: var(--container-narrow);
+  max-width: var(--container-list);
 }
 
 .page-head {

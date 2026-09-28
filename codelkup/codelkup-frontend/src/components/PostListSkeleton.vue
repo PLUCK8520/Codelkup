@@ -5,6 +5,9 @@
  * 用骨架而非 spinner：骨架的空间占位与真实卡片一致，
  * 数据到达时布局不跳动（CLS ≈ 0）；spinner 会让内容"顶"上来。
  *
+ * ★ v6：骨架外形跟随 PostCard 的行式改版（无左侧计数条、整体更矮）。
+ * ⚠️ 改 PostCard 的布局时这里要同步 —— 骨架"长得不像真卡片"比没有骨架更糟。
+ *
  * 无障碍：容器标 aria-busy，对屏幕阅读器只播报一次"加载中"，
  *        而不是逐块朗读无意义的灰色方块。
  */
@@ -16,22 +19,12 @@ withDefaults(defineProps<{ count?: number }>(), { count: 5 })
     <span class="sr-only">正在加载帖子列表…</span>
 
     <div v-for="i in count" :key="i" class="skeleton-card" aria-hidden="true">
-      <!-- 左侧计数条占位（与 PostCard 的 figures 同宽） -->
-      <div class="sk-figures">
-        <span class="sk-bar sk-bar-sm" />
-        <span class="sk-bar sk-bar-sm" />
-        <span class="sk-bar sk-bar-sm" />
-      </div>
-
-      <div class="sk-body">
-        <span class="sk-bar sk-title" />
-        <span class="sk-bar sk-line" />
-        <span class="sk-bar sk-line sk-line-short" />
-        <div class="sk-footer">
-          <span class="sk-bar sk-chip" />
-          <span class="sk-bar sk-chip" />
-          <span class="sk-bar sk-meta" />
-        </div>
+      <span class="sk-bar sk-title" />
+      <span class="sk-bar sk-line" />
+      <div class="sk-footer">
+        <span class="sk-bar sk-chip" />
+        <span class="sk-bar sk-chip" />
+        <span class="sk-bar sk-meta" />
       </div>
     </div>
   </div>
@@ -41,32 +34,18 @@ withDefaults(defineProps<{ count?: number }>(), { count: 5 })
 .skeleton-list {
   display: flex;
   flex-direction: column;
-  gap: var(--space-3);
+  gap: var(--space-2);
 }
 
+/* 外形对齐 PostCard v6：行式、发丝边、radius-md */
 .skeleton-card {
-  display: flex;
-  gap: var(--space-4);
-  padding: var(--space-4) var(--space-5);
-  background: var(--color-card);
-  border: 1px solid var(--color-border-subtle);
-  border-radius: var(--radius-lg);
-}
-
-.sk-figures {
   display: flex;
   flex-direction: column;
   gap: var(--space-2);
-  min-width: 52px;
-  flex-shrink: 0;
-}
-
-.sk-body {
-  flex: 1;
-  min-width: 0;
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-3);
+  padding: var(--space-3) var(--space-4);
+  background: var(--color-card);
+  border: 1px solid var(--color-border-hairline);
+  border-radius: var(--radius-md);
 }
 
 /* ---------- 骨架条 ---------- */
@@ -84,23 +63,14 @@ withDefaults(defineProps<{ count?: number }>(), { count: 5 })
   animation: sk-shimmer 1.4s ease infinite;
 }
 
-.sk-bar-sm {
-  height: 12px;
-  width: 100%;
-}
-
 .sk-title {
-  height: 18px;
-  width: 62%;
+  height: 16px;
+  width: 58%;
 }
 
 .sk-line {
-  height: 13px;
-  width: 100%;
-}
-
-.sk-line-short {
-  width: 78%;
+  height: 12px;
+  width: 86%;
 }
 
 .sk-footer {
@@ -111,14 +81,13 @@ withDefaults(defineProps<{ count?: number }>(), { count: 5 })
 }
 
 .sk-chip {
-  height: 18px;
-  width: 52px;
-  border-radius: var(--radius-sm);
+  height: 16px;
+  width: 48px;
 }
 
 .sk-meta {
-  height: 13px;
-  width: 150px;
+  height: 12px;
+  width: 190px;
   margin-left: auto;
 }
 
@@ -146,11 +115,7 @@ withDefaults(defineProps<{ count?: number }>(), { count: 5 })
 
 @media (max-width: 640px) {
   .skeleton-card {
-    padding: var(--space-3) var(--space-4);
-  }
-
-  .sk-figures {
-    display: none;
+    padding: var(--space-3);
   }
 }
 </style>

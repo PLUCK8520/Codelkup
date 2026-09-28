@@ -268,8 +268,11 @@ const TOOLBAR = [
   border-radius: var(--radius-sm);
 }
 
+/* ⚠️ 激活态必须是**白字**压蓝底（--color-on-accent）：
+   深色字（--color-foreground）压 #2563EB 只有 3.35:1，不达标 —— v5 的
+   "浅字压橙底"其实是同一类错误，v6 一并按对比度结论修正。 */
 .switch-btn.active {
-  color: var(--color-foreground);
+  color: var(--color-on-accent);
   background: var(--color-accent-solid);
   border-color: var(--color-accent-solid);
 }

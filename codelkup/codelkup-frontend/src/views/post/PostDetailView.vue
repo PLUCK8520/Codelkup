@@ -268,6 +268,9 @@ async function onFeature(action: 'top' | 'featured') {
 
           <!-- 作者与时间 -->
           <div class="post-meta">
+            <!-- v5：工单编号 —— 元信息行最前面的档案号（.idx 为全球统一令牌样式） -->
+            <span class="idx">#{{ post.id }}</span>
+            <span class="meta-sep" aria-hidden="true">·</span>
             <RouterLink
               :to="{ name: 'user-profile', params: { id: post.authorId } }"
               class="meta-author"
@@ -519,7 +522,8 @@ async function onFeature(action: 'top' | 'featured') {
 .post {
   padding: var(--space-6);
   background: var(--color-card);
-  border: 1px solid var(--color-border-subtle);
+  /* 实体白卡只用 1px 发丝边勾轮廓（内部分隔线交给 border-subtle） */
+  border: 1px solid var(--color-border-hairline);
   border-radius: var(--radius-lg);
 }
 
@@ -554,7 +558,7 @@ async function onFeature(action: 'top' | 'featured') {
   border: 1px solid var(--color-border-hairline);
 }
 
-/* 提问的解决状态：绿=有答案了，橙=还等人答。
+/* 提问的解决状态：绿=有答案了，琥珀=还等人答。
    两个徽标都用"柔和底 + 同色描边"，与置顶/精华的视觉重量保持一致，
    不靠高饱和底色抢标题的注意力。 */
 .badge-solved {
@@ -575,7 +579,7 @@ async function onFeature(action: 'top' | 'featured') {
 .post-title {
   font-size: var(--text-2xl);
   line-height: var(--leading-tight);
-  letter-spacing: -0.02em;
+  letter-spacing: var(--tracking-heading);
 }
 
 /* ---------- 元信息 ---------- */
@@ -587,6 +591,11 @@ async function onFeature(action: 'top' | 'featured') {
   margin-top: var(--space-4);
   padding-bottom: var(--space-4);
   border-bottom: 1px solid var(--color-border-subtle);
+}
+
+/* 工单编号后的分隔点（与面包屑的 .crumb-sep 同色） */
+.meta-sep {
+  color: var(--color-border);
 }
 
 .meta-author {
@@ -644,9 +653,64 @@ async function onFeature(action: 'top' | 'featured') {
   border-color: var(--color-border);
 }
 
-/* ---------- 正文 ---------- */
+/* ---------- 正文（v5 阅读区）----------
+   阅读区是"全产品最舒服的区域"：定宽 720px（约 40 汉字/行）、16px / 1.8、
+   标题与段落留白充足 —— 与列表页的"高密度"刻意反差。
+   MarkdownViewer 的排版是组件级 scoped，这里用 :deep 在本文件内再收一道口
+   （本轮只允许改本文件，不动子组件）。加 `.post` 前缀是为了在层叠里稳压子组件规则。 */
 .post-content {
-  margin-top: var(--space-5);
+  max-width: var(--container-reading);
+  /* ★ v6.1：在卡片内**居中** —— v5 靠左时右侧留下约 150px 空白，
+     1440 桌面下读起来像"排版没做完"；居中后两侧均衡。 */
+  margin: var(--space-5) auto 0;
+}
+
+/* ⚠️ 令牌没有 1.8 这一档（最接近的 --leading-relaxed = 1.75）。
+   阅读区按 v5 规格取 1.8 —— 本次唯一直接写的排版字面量（非色值）。 */
+.post .post-content :deep(.markdown-body) {
+  line-height: 1.8;
+}
+
+/* 标题上下留白加大：h2 上间距按规格示例取 --space-8 */
+.post .post-content :deep(.markdown-body h2) {
+  margin-top: var(--space-8);
+  margin-bottom: var(--space-4);
+}
+
+.post .post-content :deep(.markdown-body h3) {
+  margin-top: var(--space-6);
+  margin-bottom: var(--space-3);
+}
+
+/* 段间距充分：16 → 20px */
+.post .post-content :deep(.markdown-body p) {
+  margin: var(--space-5) 0;
+}
+
+/* 引用块：左侧 2px 主色线 + 直角、无底色 —— 蓝图式引用，不要彩色底 */
+.post .post-content :deep(.markdown-body blockquote) {
+  margin: var(--space-5) 0;
+  padding: var(--space-3) var(--space-4);
+  background: none;
+  border-left: 2px solid var(--color-accent);
+  border-radius: 0;
+  color: var(--color-muted-foreground);
+}
+
+/* 独立代码块：--code-bg + --radius-md + 1px 发丝边。
+   ⚠️ 只选 `.markdown-body > pre`（未被增强包裹的裸 pre）——
+   被 useCodeBlocks 包过的 pre 是 .code-block 的子节点，边框交给外壳，避免双重边框 */
+.post .post-content :deep(.markdown-body > pre),
+.post .post-content :deep(.markdown-body .code-block) {
+  background: var(--code-bg);
+  border: 1px solid var(--color-border-hairline);
+  border-radius: var(--radius-md);
+}
+
+/* 行内 code：--code-bg-soft（用 :not(pre) 排除块内代码，不需要 Level 4 的复杂 :not） */
+.post .post-content :deep(.markdown-body :not(pre) > code) {
+  background: var(--code-bg-soft);
+  border: 1px solid var(--color-border-hairline);
 }
 
 /* ---------- 底部计数 ---------- */
@@ -695,7 +759,10 @@ async function onFeature(action: 'top' | 'featured') {
 
 .act-btn:hover:not(:disabled) {
   color: var(--color-foreground);
-  border-color: var(--color-accent);
+  border-color: var(--color-accent-border);
+  /* v6 hover：纸片轻浮（蓝调柔影），不做硬印章/彩色光晕 */
+  transform: translateY(-1px);
+  box-shadow: var(--shadow-lift);
 }
 
 .act-btn:disabled {
@@ -703,11 +770,12 @@ async function onFeature(action: 'top' | 'featured') {
   cursor: progress;
 }
 
-/* 已激活：强调色描边 + 淡背景，与"我点过"的状态一致 */
+/* 已激活（已赞 / 已藏）：低饱和底 + 同色描边 + 信号色文字，
+   主色只表达"我点过"这一状态，不做大面积实心色块 */
 .act-btn.is-active {
   color: var(--color-accent);
   background: var(--color-accent-soft);
-  border-color: var(--color-accent);
+  border-color: var(--color-accent-border);
 }
 
 .act-count {
@@ -727,8 +795,18 @@ async function onFeature(action: 'top' | 'featured') {
 .side-card {
   padding: var(--space-4);
   background: var(--color-card);
-  border: 1px solid var(--color-border-subtle);
+  /* 白纸卡 + 1px 发丝边 */
+  border: 1px solid var(--color-border-hairline);
   border-radius: var(--radius-lg);
+  transition: background var(--transition-fast), box-shadow var(--transition-fast),
+    transform var(--transition-fast);
+}
+
+/* v6 hover：纸片轻浮（蓝调柔影） */
+.side-card:hover {
+  background: var(--color-card-hover);
+  transform: translateY(-1px);
+  box-shadow: var(--shadow-lift);
 }
 
 .side-title {
@@ -785,6 +863,37 @@ async function onFeature(action: 'top' | 'featured') {
   font-variant-numeric: tabular-nums;
 }
 
+/* ---------- 评论区（子组件在本文件内深度重制）----------
+   评论区容器与单条评论都是"卡片 + 1px 发丝边 + --radius-lg"。
+   单条评论用 --color-muted 降一档底色：浅色下灰蓝底比描边更能区分相邻评论。 */
+.main-col :deep(.comments) {
+  border: 1px solid var(--color-border-hairline);
+  border-radius: var(--radius-lg);
+}
+
+/* 单条评论：嵌套实体卡，用 flex gap 取代原来的 border-bottom 分隔 */
+.main-col :deep(.comments-list) {
+  gap: var(--space-3);
+}
+
+.main-col :deep(.comment) {
+  padding: var(--space-4);
+  background: var(--color-muted);
+  border: 1px solid var(--color-border-hairline);
+  border-radius: var(--radius-lg);
+}
+
+/* 评论输入框底提到 --color-muted（:not(:focus) 是为了不盖掉子组件的焦点主色边） */
+.main-col :deep(.composer-input:not(:focus)) {
+  background: var(--color-muted);
+  border: 1px solid var(--color-border-hairline);
+}
+
+/* 采纳态：success 实色左边条（与 CommentItem 内部规则同值，避免两处不一致） */
+.main-col :deep(.is-accepted) {
+  border-left-color: var(--color-success);
+}
+
 /* ---------- 骨架 ---------- */
 .detail-skeleton {
   display: flex;
@@ -792,7 +901,7 @@ async function onFeature(action: 'top' | 'featured') {
   gap: var(--space-4);
   padding: var(--space-6);
   background: var(--color-card);
-  border: 1px solid var(--color-border-subtle);
+  border: 1px solid var(--color-border-hairline);
   border-radius: var(--radius-lg);
 }
 

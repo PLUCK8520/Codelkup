@@ -412,7 +412,7 @@ async function onDelete() {
 .is-accepted {
   padding-left: var(--space-3);
   margin-left: calc(var(--space-3) * -1);
-  border-left: 2px solid rgba(16, 185, 129, 0.6);
+  border-left: 2px solid var(--color-success);
 }
 
 /* ---------- 回复 ---------- */

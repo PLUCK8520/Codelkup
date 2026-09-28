@@ -5,19 +5,23 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
 
     <!--
-      theme-color：让移动端浏览器的地址栏跟随页面底色，避免默认的白色
-      在暗色页面上形成一条刺眼的亮边。
+      theme-color：让移动端浏览器的地址栏跟随页面底色。
+      ★ v6 修订：底色换回浅色（#F5F8FC，与 tokens.css 的 --color-background
+        同值）—— 这里只能写死（浏览器读 meta 时不认识 CSS 变量），
+        改 tokens 的底色时**必须同步改这一行**，否则移动端地址栏会停在旧色。
     -->
-    <meta name="theme-color" content="#0b1220" />
+    <meta name="theme-color" content="#F5F8FC" />
     <meta name="description" content="Codelkup —— 面向开发者的技术问答与讨论社区" />
     <!--
       站点图标：放在 public/ 下由 Vite 原样服务（/favicon.svg）。
       ⚠️ 这里必须显式声明 —— 只把文件丢进 public 而不声明，浏览器会去请求
          /favicon.ico（不存在 → 404），然后退回"上一个页面的图标"或空白，
          表现为"标签页图标是别的项目的"（浏览器按同源缓存 favicon，很容易串）。
+      ⚠️ 带 ?v= 版本参数：浏览器对 favicon 的缓存非常顽固（按 URL 缓存），
+         不带参数时换了图标要用户"清缓存"才看得到 —— 改图标时同步 bump 这个版本号。
     -->
-    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
-    <link rel="apple-touch-icon" href="/favicon.svg" />
+    <link rel="icon" type="image/svg+xml" href="/favicon.svg?v=2" />
+    <link rel="apple-touch-icon" href="/favicon.svg?v=2" />
     <title>Codelkup · 开发者技术社区</title>
 
     <!--

@@ -1,14 +1,26 @@
 <!--
   Codelkup 站点图标（favicon）。
-  图形与顶栏品牌标识同源：圆角方块 + 白色 </> 双尖括号。
+  图形与顶栏品牌标识同源：蓝底 + 斜切折带 + 终端提示符（大于号加光标块）。
+  2026-09-28 重新设计（用户拍板 A 方案，四候选对比见
+  .workbuddy/ui-review/icon-variants.png）：
+  从「尖括号」换成「终端提示符」，命令行语汇更贴开发者社区气质；
+  单元素符号在 16px 下无损（尖括号版 16px 时斜杠会与括号粘成一团）。
   用 SVG 而不是 ico/png：矢量、几行就能看懂，现代浏览器全支持；
-  底色取自设计令牌 --color-accent-solid(#2563eb)，改品牌色时这里要一起改。
+  底色取自设计令牌 accent-solid（tokens.css 里的 #2563eb），改品牌色时这里要一起改。
+  ⚠️ 折带必须 clip 到圆角内：否则四角会露出直角白块（浏览器背景非白时很显眼）。
+  ⚠️ 注释里不要出现连续两个 ASCII 连字符（XML 规范禁止，浏览器会直接报解析错误）。
 -->
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" role="img" aria-label="Codelkup">
-  <rect width="32" height="32" rx="8" fill="#2563eb" />
-  <g transform="translate(4 4)" fill="none" stroke="#ffffff" stroke-width="2.6"
-     stroke-linecap="round" stroke-linejoin="round">
-    <polyline points="16 18 22 12 16 6" />
-    <polyline points="8 6 2 12 8 18" />
+  <defs>
+    <clipPath id="rounded">
+      <rect width="32" height="32" rx="8" />
+    </clipPath>
+  </defs>
+  <g clip-path="url(#rounded)">
+    <rect width="32" height="32" fill="#2563eb" />
+    <path d="M32 5 V17 L17 32 H5 Z" fill="#ffffff" opacity="0.16" />
+    <path d="M0 27 L27 0 H32 V5 L5 32 H0 Z" fill="#ffffff" opacity="0.10" />
+    <polyline points="10.5 9.5 17.5 16 10.5 22.5" fill="none" stroke="#ffffff" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" />
+    <rect x="20" y="20.2" width="6.8" height="3" rx="1.5" fill="#ffffff" />
   </g>
 </svg>

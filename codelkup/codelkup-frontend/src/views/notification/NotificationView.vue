@@ -432,7 +432,7 @@ onBeforeUnmount(() => {
 
 <style scoped>
 .notification-page {
-  max-width: var(--container-narrow);
+  max-width: var(--container-list);
 }
 
 /* ---------- 页头 ---------- */

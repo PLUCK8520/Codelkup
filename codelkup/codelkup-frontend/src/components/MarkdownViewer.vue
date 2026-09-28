@@ -94,7 +94,8 @@ onMounted(enhance)
   color: var(--color-accent);
   text-decoration: underline;
   text-underline-offset: 2px;
-  text-decoration-color: rgba(59, 130, 246, 0.4);
+  /* 下划线用主色低透明度：装饰弱于文字本身 */
+  text-decoration-color: var(--color-accent-border);
 }
 
 .markdown-body :deep(a:hover) {
@@ -147,7 +148,7 @@ onMounted(enhance)
   padding: 0;
   border: none;
   background: none;
-  color: #e2e8f0;
+  color: var(--code-fg);
   font-size: var(--text-sm);
 }
 
@@ -171,7 +172,7 @@ onMounted(enhance)
   gap: var(--space-3);
   padding: var(--space-2) var(--space-3);
   border-bottom: 1px solid var(--color-border-subtle);
-  background: rgba(255, 255, 255, 0.02);
+  background: var(--code-bg-soft);
 }
 
 .markdown-body :deep(.code-lang) {
@@ -289,6 +290,6 @@ onMounted(enhance)
 }
 
 .markdown-body :deep(tbody tr:hover) {
-  background: rgba(30, 41, 59, 0.5);
+  background: var(--color-muted);
 }
 </style>

@@ -80,10 +80,9 @@ const tip = computed(() => {
 }
 
 .lv-5 {
-  color: #fff;
+  color: var(--color-on-accent);
   background: var(--color-accent-solid);
   border-color: var(--color-accent-solid);
-  box-shadow: var(--inset-highlight);
 }
 
 .size-sm {

@@ -67,10 +67,14 @@ async function onSubmit() {
       <!-- 品牌 -->
       <RouterLink :to="{ name: 'home' }" class="auth-brand">
         <span class="brand-mark" aria-hidden="true">
-          <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor"
-               stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
-            <polyline points="16 18 22 12 16 6" />
-            <polyline points="8 6 2 12 8 18" />
+          <svg viewBox="0 0 32 32" width="30" height="30" aria-hidden="true">
+            <path d="M32 5 V17 L17 32 H5 Z" fill="currentColor" opacity="0.16" />
+            <path d="M0 27 L27 0 H32 V5 L5 32 H0 Z" fill="currentColor" opacity="0.10" />
+            <g fill="none" stroke="currentColor" stroke-width="3"
+               stroke-linecap="round" stroke-linejoin="round">
+              <polyline points="10.5 9.5 17.5 16 10.5 22.5" />
+            </g>
+            <rect x="20" y="20.2" width="6.8" height="3" rx="1.5" fill="currentColor" />
           </svg>
         </span>
         <span class="brand-name">Codelkup</span>
@@ -136,9 +140,10 @@ async function onSubmit() {
   place-items: center;
   min-height: 100vh;
   padding: var(--space-6);
+  /* v6：浅色下全屏纯色会显得"空"，顶部给一层 9% 蓝的淡光（品牌区氛围），
+     用令牌而非写死色值；往下完全交给底色，不干扰表单 */
   background:
-    /* ★ v4：删掉这里原有的页内径向光晕 —— 全站背景已经带了三处色彩斑，
-     再叠一层只会让玻璃卡片背后的颜色过曝；玻璃需要干净的色彩底衬。 */
+    radial-gradient(640px 300px at 50% 0%, var(--color-accent-soft), transparent 70%),
     var(--color-background);
 }
 
@@ -169,8 +174,10 @@ async function onSubmit() {
   width: 30px;
   height: 30px;
   border-radius: var(--radius-md);
+  /* 折带是直角到边的，必须裁进圆角（否则四角露白块） */
+  overflow: hidden;
   background: var(--color-accent-solid);
-  color: #fff;
+  color: var(--color-on-accent);
 }
 
 .auth-title {

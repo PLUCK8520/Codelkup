@@ -199,7 +199,7 @@ watch(
 
 <style scoped>
 .connections-page {
-  max-width: var(--container-narrow);
+  max-width: var(--container-list);
 }
 
 .page-head {

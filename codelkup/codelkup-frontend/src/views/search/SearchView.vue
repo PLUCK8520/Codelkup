@@ -428,7 +428,7 @@ onMounted(() => {
 
 <style scoped>
 .search-page {
-  max-width: var(--container-narrow);
+  max-width: var(--container-list);
 }
 
 /* ---------- 页头 ---------- */
@@ -580,7 +580,7 @@ onMounted(() => {
 .post-list {
   display: flex;
   flex-direction: column;
-  gap: var(--space-3);
+  gap: var(--space-2);
 }
 
 .error-alert {

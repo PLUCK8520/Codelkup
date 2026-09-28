@@ -141,7 +141,7 @@ async function remove(d: DraftSummaryVO) {
 <style scoped>
 /* 与「我的收藏」共用页面骨架（page-head / 标题层级），只是列表项换成了草稿行 */
 .collections-page {
-  max-width: var(--container-narrow);
+  max-width: var(--container-list);
 }
 
 .page-head {

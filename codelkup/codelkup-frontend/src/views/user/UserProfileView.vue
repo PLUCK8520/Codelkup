@@ -450,7 +450,7 @@ function changePage(p: number) {
 .post-list {
   display: flex;
   flex-direction: column;
-  gap: var(--space-3);
+  gap: var(--space-2);
 }
 
 .pagination {

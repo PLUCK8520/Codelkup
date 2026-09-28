@@ -338,10 +338,10 @@ statsApi
            第一眼像后台管理页，不像一个产品。这里补上品牌面貌。
            数据全部取自真实接口，不编造增长数字。 -->
       <section v-if="showHero" class="hero">
-        <div class="hero-glow" aria-hidden="true" />
         <div class="hero-grid" aria-hidden="true" />
 
         <p class="hero-eyebrow">
+          <span class="sec-num">§ 01</span>
           <span class="hero-pulse" aria-hidden="true" />
           开发者技术社区
         </p>
@@ -386,7 +386,9 @@ statsApi
         </dl>
       </section>
 
-      <!-- 页头（有 Hero 时让位；筛选/板块页保留） -->
+      <!-- 页头（有 Hero 时让位；筛选/板块页保留）。
+           ★ v6.2：挪到横排带**之前**——板块页的顺序变成"板块名 → 横排带 → 帖子"
+           （标题优先），同时与 hero 保持相邻（v-else 得以恢复）。 -->
       <header v-else class="page-head">
         <div class="page-head-text">
           <h1 class="page-title">{{ pageTitle }}</h1>
@@ -398,6 +400,72 @@ statsApi
           </el-button>
         </div>
       </header>
+
+      <!-- ==================== 顶部横排带（v6.2 新布局）====================
+           原右侧栏的三张卡（板块 / 热门标签 / 活跃作者）按用户指定
+           移到页面上方、横排为一排；页面回归单列，帖子流用双列卡片。 -->
+      <aside class="top-strip">
+        <!-- 板块导航：预览前 6 + 入口（全集在 /boards，那里还有每个板块的简介） -->
+        <section class="side-card">
+          <h2 class="side-title">板块</h2>
+          <nav class="board-nav">
+            <RouterLink
+              :to="{ name: 'home' }"
+              class="board-item"
+              :class="{ active: !route.params.slug && !currentTagId }"
+            >
+              <span class="board-name">全部讨论</span>
+            </RouterLink>
+            <RouterLink
+              v-for="board in sidebarBoards"
+              :key="board.id"
+              :to="{ name: 'board', params: { slug: board.slug } }"
+              class="board-item"
+              :class="{ active: route.params.slug === board.slug }"
+            >
+              <span class="board-name">{{ board.name }}</span>
+              <span v-if="board.postCount > 0" class="board-count">{{ board.postCount }}</span>
+            </RouterLink>
+          </nav>
+          <RouterLink :to="{ name: 'boards' }" class="side-more">全部板块 →</RouterLink>
+        </section>
+
+        <!-- 热门标签：同样只做预览，全集在 /tags -->
+        <section v-if="meta.hotTags.length" class="side-card">
+          <h2 class="side-title">热门标签</h2>
+          <div class="tag-cloud">
+            <button
+              v-for="tag in meta.hotTags"
+              :key="tag.id"
+              type="button"
+              class="cloud-tag"
+              :class="{ active: currentTagId === tag.id }"
+              @click="changeTag(currentTagId === tag.id ? undefined : tag.id)"
+            >
+              {{ tag.name }}
+            </button>
+          </div>
+          <RouterLink :to="{ name: 'tags' }" class="side-more">全部标签 →</RouterLink>
+        </section>
+
+        <!-- 活跃作者（复用排行榜接口的前 5）：给"这个社区有活人"一个证据 -->
+        <section v-if="topAuthors.length" class="side-card">
+          <h2 class="side-title">活跃作者</h2>
+          <ul class="author-list">
+            <li v-for="a in topAuthors" :key="a.id">
+              <RouterLink
+                :to="{ name: 'user-profile', params: { id: a.id } }"
+                class="author-row"
+              >
+                <UserAvatar :src="a.avatar" :name="a.nickname" :seed="a.id" :size="26" />
+                <span class="author-name">{{ a.nickname }}</span>
+                <span class="author-rep">{{ a.reputation }}</span>
+              </RouterLink>
+            </li>
+          </ul>
+          <RouterLink :to="{ name: 'ranking' }" class="side-more">完整榜单 →</RouterLink>
+        </section>
+      </aside>
 
       <!-- 排序 + 结果计数 -->
       <div class="toolbar">
@@ -420,8 +488,12 @@ statsApi
         </span>
       </div>
 
-      <!-- 加载骨架（不用 spinner —— 骨架能保持布局稳定，避免 CLS） -->
-      <PostListSkeleton v-if="loading" :count="5" />
+      <!-- 加载骨架（不用 spinner —— 骨架能保持布局稳定，避免 CLS）。
+           ⚠️ v6.2：骨架包进 .post-list（并随它双列化，见样式里的 :deep 覆写），
+           否则"单列骨架 → 双列内容"会在数据到达时整页跳一下（CLS ≈ 0 的承诺就破了）。 -->
+      <div v-if="loading" class="post-list">
+        <PostListSkeleton :count="6" />
+      </div>
 
       <!-- 错误 -->
       <el-alert
@@ -484,84 +556,13 @@ statsApi
       </div>
     </div>
 
-    <!-- ==================== 侧栏 ==================== -->
-    <aside class="side-col">
-      <!-- 板块导航：预览前 6 + 入口（全集在 /boards，那里还有每个板块的简介） -->
-      <section class="side-card">
-        <h2 class="side-title">板块</h2>
-        <nav class="board-nav">
-          <RouterLink
-            :to="{ name: 'home' }"
-            class="board-item"
-            :class="{ active: !route.params.slug && !currentTagId }"
-          >
-            <span class="board-name">全部讨论</span>
-          </RouterLink>
-          <RouterLink
-            v-for="board in sidebarBoards"
-            :key="board.id"
-            :to="{ name: 'board', params: { slug: board.slug } }"
-            class="board-item"
-            :class="{ active: route.params.slug === board.slug }"
-          >
-            <span class="board-name">{{ board.name }}</span>
-            <span v-if="board.postCount > 0" class="board-count">{{ board.postCount }}</span>
-          </RouterLink>
-        </nav>
-        <RouterLink :to="{ name: 'boards' }" class="side-more">全部板块 →</RouterLink>
-      </section>
-
-      <!-- 热门标签：同样只做预览，全集在 /tags -->
-      <section v-if="meta.hotTags.length" class="side-card">
-        <h2 class="side-title">热门标签</h2>
-        <div class="tag-cloud">
-          <button
-            v-for="tag in meta.hotTags"
-            :key="tag.id"
-            type="button"
-            class="cloud-tag"
-            :class="{ active: currentTagId === tag.id }"
-            @click="changeTag(currentTagId === tag.id ? undefined : tag.id)"
-          >
-            {{ tag.name }}
-          </button>
-        </div>
-        <RouterLink :to="{ name: 'tags' }" class="side-more">全部标签 →</RouterLink>
-      </section>
-
-      <!-- 活跃作者（复用排行榜接口的前 5）：给"这个社区有活人"一个证据，
-           同时把流量导向 /ranking —— 榜单页此前只有顶栏一个入口 -->
-      <section v-if="topAuthors.length" class="side-card">
-        <h2 class="side-title">活跃作者</h2>
-        <ul class="author-list">
-          <li v-for="a in topAuthors" :key="a.id">
-            <RouterLink
-              :to="{ name: 'user-profile', params: { id: a.id } }"
-              class="author-row"
-            >
-              <UserAvatar :src="a.avatar" :name="a.nickname" :seed="a.id" :size="26" />
-              <span class="author-name">{{ a.nickname }}</span>
-              <span class="author-rep">{{ a.reputation }}</span>
-            </RouterLink>
-          </li>
-        </ul>
-        <RouterLink :to="{ name: 'ranking' }" class="side-more">完整榜单 →</RouterLink>
-      </section>
-
-      <!-- 「关于 Codelkup」卡片本轮移除：它的三句话与 Hero 副标题、页脚里的技术栈重复，
-           却占着约 150px 把 sticky 侧栏顶出视口（超出视口高度的部分基本看不到）。
-           内容都在别处：品牌与定位见 Hero，技术栈见页脚。 -->
-    </aside>
-  </div>
-</template>
+    <!-- 右侧栏已移至顶部横排带（v6.2，见上方 .top-strip） -->
+    </div>
+  </template>
 
 <style scoped>
-.home-layout {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) 280px;
-  gap: var(--space-6);
-  align-items: start;
-}
+/* ★ v6.2：右栏三卡移到页面上方横排（.top-strip）后，页面回归**单列** ——
+   帖子流接管整个 1200 容器，用双列卡片（见 .post-list）。 */
 
 /* ---------- 主列 ---------- */
 .main-col {
@@ -569,50 +570,39 @@ statsApi
 }
 
 /* ==================== 首屏 Hero ====================
-   做法说明（为什么这样写才"不廉价"）：
-   1. 面不是纯色，而是极浅的斜向渐变 + 一层网格纹理 —— 纯色暗块在
-      大屏上会显得空；纹理提供"材质感"，但透明度压到 2.8%，
-      只在余光里起作用，不会干扰阅读。
-   2. 光晕放在左上角（视线起点），用 accent 色的模糊径向渐变制造纵深。
-   3. 标题第二行用**单色高光渐变**（白 → 70% 白）建立记忆点。
-      ⚠️ v3 修正：原来是"蓝→靛→绿"三色渐变，那是模板感的典型特征，
-      且把品牌强调色稀释成了彩虹。
+   v6「白纸浅蓝」的做法：
+   1. 白纸卡（--color-card）+ 1px 发丝边：浅色下不叠任何彩色底 ——
+      首屏要像一张干净的扉页，不是海报。
+   2. 网格纹理改为**浅蓝**且全站只留这一处（--color-grid-line，24px）：
+      浅色下纹理超过 6% 就会"先被看见、再被讨厌"，所以再压一档。
+   3. 标题第二行用实心蓝立记忆点（全站唯一允许的大面积主色文字）。
    4. 数据统计用真实接口值，加载中显示破折号而非 0。 */
 .hero {
   position: relative;
   overflow: hidden;
   margin-bottom: var(--space-6);
-  padding: var(--space-10) var(--space-8) var(--space-8);
-  /* ★ v3：三色渐变底（#16233d → #121b2e，都是旧色值）→ 纯卡片色
-     + 一层极弱的强调色顶光。整块用渐变会让首屏像"海报"，而干净的
-     表面 + 一条发丝边 + 顶部内高光，才是暗色产品的高级观感。 */
+  padding: var(--space-8);
   background-color: var(--color-card);
-  background-image: linear-gradient(180deg, rgba(59, 130, 246, 0.045) 0%, transparent 46%);
   border: 1px solid var(--color-border-hairline);
-  border-radius: var(--radius-xl);
-  box-shadow: var(--inset-highlight);
-}
-
-.hero-glow {
-  position: absolute;
-  top: -150px;
-  left: -90px;
-  width: 540px;
-  height: 340px;
-  background: radial-gradient(closest-side, var(--color-accent-glow), transparent 78%);
-  filter: blur(56px);
-  /* ★ v3：0.6 → 0.3。首屏保留一点纵深，但不再"发着光"。 */
-  opacity: 0.3;
-  pointer-events: none;
+  border-radius: var(--radius-lg);
+  /* ★ v6.1：从"单列 + 底部统计"改为**左文案 / 右统计**双栏 ——
+     1440 桌面下旧版右侧一大片空白、整卡高约 330px 挡掉半屏帖子；
+     改后高度约 290px，首屏能多看 1~2 条。元素间距沿用各自的 margin，
+     所以 row-gap 归零、只留列间距（不改模板，用 grid 位置定位 stats）。 */
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  column-gap: var(--space-10);
 }
 
 .hero-grid {
   position: absolute;
   inset: 0;
+  /* ★ v6：线色改走令牌 --color-grid-line（浅蓝 5.5%）——
+     v5 的"深底白线"照搬到浅色会把首屏印成格子布。 */
   background-image:
-    linear-gradient(rgba(255, 255, 255, 0.022) 1px, transparent 1px),
-    linear-gradient(90deg, rgba(255, 255, 255, 0.022) 1px, transparent 1px);
-  background-size: 44px 44px;
+    linear-gradient(var(--color-grid-line) 1px, transparent 1px),
+    linear-gradient(90deg, var(--color-grid-line) 1px, transparent 1px);
+  background-size: 24px 24px;
   /* 只在左上区域显形，向右下淡出，避免整块"格子布" */
   mask-image: radial-gradient(130% 105% at 18% 0%, #000 28%, transparent 76%);
   -webkit-mask-image: radial-gradient(130% 105% at 18% 0%, #000 28%, transparent 76%);
@@ -624,6 +614,8 @@ statsApi
   display: inline-flex;
   align-items: center;
   gap: var(--space-2);
+  /* grid stretch 会把 inline-flex 拉成整行宽的横条，这里是"标签"不是"横条" */
+  justify-self: start;
   padding: 4px var(--space-3);
   margin-bottom: var(--space-4);
   font-size: var(--text-xs);
@@ -632,29 +624,42 @@ statsApi
   color: var(--color-muted-foreground);
   background: var(--color-neutral-soft);
   border: 1px solid var(--color-border-hairline);
-  border-radius: var(--radius-full);
+  /* ★ v5：胶囊形态 → 规格标签（--radius-sm），与全站硬朗圆角一致 */
+  border-radius: var(--radius-sm);
 }
 
-/* 小圆点表示"这里活着"。★ v3：把绿色光晕的扩散半径与不透明度都压下来
-   （7px/0.5 → 5px/0.32）—— 原来的呼吸光晕在暗色首屏上像一盏闪烁的灯。 */
+/* 小圆点表示"这里活着"。颜色用唯一信号色（v6 起为蓝）；扩散改用伪元素的
+   scale（1 → 1.7，6px 上约 4px 幅度）代替 box-shadow 扩散 ——
+   有生命感，但不会闪成一只跑马灯，也避免了硬编码 rgba。 */
 .hero-pulse {
+  position: relative;
   width: 6px;
   height: 6px;
   border-radius: var(--radius-full);
-  background: var(--color-success);
-  box-shadow: 0 0 0 0 rgba(16, 185, 129, 0.32);
+  background: var(--color-accent);
+}
+
+.hero-pulse::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  border-radius: var(--radius-full);
+  background: var(--color-accent);
   animation: hero-pulse 2.8s var(--ease-out) infinite;
 }
 
 @keyframes hero-pulse {
   0% {
-    box-shadow: 0 0 0 0 rgba(16, 185, 129, 0.32);
+    transform: scale(1);
+    opacity: 0.5;
   }
   70% {
-    box-shadow: 0 0 0 5px rgba(16, 185, 129, 0);
+    transform: scale(1.7);
+    opacity: 0;
   }
   100% {
-    box-shadow: 0 0 0 0 rgba(16, 185, 129, 0);
+    transform: scale(1.7);
+    opacity: 0;
   }
 }
 
@@ -670,14 +675,9 @@ statsApi
 
 .hero-title-accent {
   display: block;
-  /* ★ v3：蓝→靛→绿的三色渐变 → 白→70% 白的单色渐变。
-     多色相渐变是"AI 模板感"最强的特征；单色高光渐变既保留"标题有光"，
-     又不会把品牌色稀释成彩虹。配方来自 ui-ux-pro-max
-     --domain typography「Modern Dark Cinema (Inter System)」。 */
-  background: linear-gradient(180deg, #ffffff 0%, rgba(255, 255, 255, 0.72) 100%);
-  -webkit-background-clip: text;
-  background-clip: text;
-  color: transparent;
+  /* 标题就是纯色（不做渐变文字/发光）。这里是全站唯一允许的
+     大面积主色文字 —— 实心蓝既是品牌记忆点，也守住"主色只做信号"的纪律。 */
+  color: var(--color-accent);
 }
 
 .hero-sub {
@@ -716,38 +716,43 @@ statsApi
 }
 
 .hero-btn-primary {
+  /* 蓝底白字（#2563EB + #FFFFFF = 5.2:1，见 wcag-contrast.py） */
   color: var(--color-on-accent);
   background: var(--color-accent-solid);
-  box-shadow: 0 6px 22px -8px var(--color-accent-glow);
 }
 
 .hero-btn-primary:hover {
+  /* hover = 深一档底 + 纸片轻浮（蓝调柔影），不做彩色光晕 */
   background: var(--color-accent-solid-hover);
   transform: translateY(-1px);
-  box-shadow: 0 12px 30px -10px var(--color-accent-glow);
+  box-shadow: var(--shadow-lift);
 }
 
 .hero-btn-ghost {
   color: var(--color-muted-foreground);
-  background: var(--color-neutral-soft);
+  background: transparent;
   border-color: var(--color-border);
 }
 
 .hero-btn-ghost:hover {
+  /* hover 只提亮前景与描边（border → border-strong），不加底色。 */
   color: var(--color-foreground);
-  background: rgba(255, 255, 255, 0.075);
-  border-color: var(--color-secondary);
+  border-color: var(--color-border-strong);
 }
 
-/* ---------- Hero 统计 ---------- */
+/* ---------- Hero 统计（v6.1：底部横排 → 右栏 2×2） ---------- */
 .hero-stats {
   position: relative;
-  display: flex;
-  flex-wrap: wrap;
-  gap: var(--space-8);
-  margin: var(--space-8) 0 0;
-  padding-top: var(--space-5);
-  border-top: 1px solid var(--color-border-subtle);
+  /* 定位到右列、纵向跨左列的 4 行（eyebrow/标题/副标/按钮各一行） */
+  grid-column: 2;
+  grid-row: 1 / span 4;
+  align-self: center;
+  display: grid;
+  grid-template-columns: repeat(2, minmax(96px, 1fr));
+  gap: var(--space-5) var(--space-8);
+  margin: 0;
+  padding-left: var(--space-8);
+  border-left: 1px solid var(--color-border-subtle);
 }
 
 .hero-stat {
@@ -764,8 +769,11 @@ statsApi
 }
 
 .hero-stat-value {
+  /* ★ v5：数字改用等宽 + 表格数字（JetBrains Mono）——"数字精确"是
+     工程社区的真实信号，等宽让多组计数纵向对齐。字重 700 → 600。 */
+  font-family: var(--font-mono);
   font-size: var(--text-xl);
-  font-weight: 700;
+  font-weight: 600;
   font-variant-numeric: tabular-nums;
   letter-spacing: -0.025em;
   color: var(--color-foreground);
@@ -822,31 +830,45 @@ statsApi
   color: var(--color-muted-foreground);
   background: none;
   border: none;
-  border-radius: var(--radius-sm);
-  transition: all var(--transition-fast);
+  /* ★ v5：从"药丸底片"改**下划线式**（透明底、无圆角）—— 排序是导航，
+     不该用实心底与内容抢注意力；当前项靠一条 2px 主色线标记。 */
+  border-radius: 0;
+  transition:
+    color var(--transition-fast),
+    box-shadow var(--transition-fast);
 }
 
 .sort-tab:hover {
   color: var(--color-foreground);
-  background: var(--color-muted);
 }
 
 .sort-tab.active {
   color: var(--color-foreground);
-  background: var(--color-muted);
+  box-shadow: inset 0 -2px 0 var(--color-accent);
   font-weight: 500;
 }
 
 .result-count {
+  font-family: var(--font-mono);
   font-size: var(--text-xs);
   color: var(--color-subtle-foreground);
   font-variant-numeric: tabular-nums;
 }
 
-/* ---------- 列表 ---------- */
+/* ---------- 列表（v6.2：单列行式 → 双列卡片网格） ----------
+   用户指定"像小红书那样"：两列卡片、同行等高（grid 默认 stretch）。
+   阅读顺序保持 1,2 / 3,4 —— CSS columns 的瀑布流会把顺序拆成"先左列后右列"，
+   列表有时间序，不能那样排。 */
 .post-list {
-  display: flex;
-  flex-direction: column;
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--space-3);
+}
+
+/* 骨架随双列走（组件根是单列 flex，这里覆写为同规格 grid） */
+.post-list :deep(.skeleton-list) {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: var(--space-3);
 }
 
@@ -860,19 +882,20 @@ statsApi
   margin-top: var(--space-6);
 }
 
-/* ---------- 侧栏 ---------- */
-.side-col {
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-4);
-  position: sticky;
-  top: 74px; /* header 高度 + 间距 */
+/* ---------- 顶部横排带（原右栏三卡，v6.2 移到上方横排） ---------- */
+.top-strip {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: var(--space-3);
+  align-items: stretch;
+  margin-bottom: var(--space-5);
 }
 
 .side-card {
   padding: var(--space-4);
+  /* ★ v5：实体卡 + 发丝边（border-subtle → border-hairline），与 .card 同规格 */
   background: var(--color-card);
-  border: 1px solid var(--color-border-subtle);
+  border: 1px solid var(--color-border-hairline);
   border-radius: var(--radius-lg);
 }
 
@@ -891,6 +914,13 @@ statsApi
   gap: 2px;
 }
 
+/* 横排带里的板块列表改 2 列：一列 7 项会把整条带子撑到 300px 高 */
+.top-strip .board-nav {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 2px var(--space-2);
+}
+
 .board-item {
   display: flex;
   align-items: center;
@@ -898,7 +928,8 @@ statsApi
   padding: var(--space-2) var(--space-3);
   font-size: var(--text-sm);
   color: var(--color-muted-foreground);
-  border-radius: var(--radius-md);
+  /* ★ v5：--radius-md → --radius-sm，小控件圆角整体收硬 */
+  border-radius: var(--radius-sm);
   transition: all var(--transition-fast);
 }
 
@@ -1012,24 +1043,41 @@ statsApi
 
 /* ---------- 响应式 ---------- */
 @media (max-width: 1024px) {
-  .home-layout {
+  /* 帖子流回单列（双列在窄屏每列太窄），横排带降为 2 列 */
+  .post-list,
+  .post-list :deep(.skeleton-list) {
     grid-template-columns: 1fr;
   }
 
-  .side-col {
-    position: static;
-    /* 侧栏移到列表下方时，用两列排布节省高度 */
-    display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
-    order: 2;
+  .top-strip {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+/* Hero 双栏在窄屏拍回单列（统计回到文案下方横排） */
+@media (max-width: 768px) {
+  .hero {
+    grid-template-columns: 1fr;
+    padding: var(--space-6) var(--space-5);
   }
 
-  .main-col {
-    order: 1;
+  .hero-stats {
+    grid-column: 1;
+    grid-row: auto;
+    margin-top: var(--space-6);
+    padding-left: 0;
+    padding-top: var(--space-5);
+    border-left: none;
+    border-top: 1px solid var(--color-border-subtle);
+    grid-template-columns: repeat(auto-fit, minmax(84px, 1fr));
   }
 }
 
 @media (max-width: 640px) {
+  .top-strip {
+    grid-template-columns: 1fr;
+  }
+
   .page-head {
     flex-direction: column;
   }
