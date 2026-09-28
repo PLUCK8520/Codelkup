@@ -41,7 +41,7 @@ docker info >/dev/null 2>&1 || fail "Docker 守护进程未运行或当前用户
 if [[ ! -f .env ]]; then
   log "未找到 .env，从模板复制"
   cp deploy/.env.production.example .env
-  fail "请先编辑 .env 填写真实密钥（DB_PASSWORD / MYSQL_ROOT_PASSWORD / JWT_SECRET / CORS_ALLOWED_ORIGINS），然后重新执行"
+  fail "请先编辑 .env 填写真实密钥（DB_PASSWORD / MYSQL_ROOT_PASSWORD / REDIS_PASSWORD / JWT_SECRET / CORS_ALLOWED_ORIGINS），然后重新执行"
 fi
 
 log "校验 .env 关键项"
@@ -52,8 +52,9 @@ log "校验 .env 关键项"
 set -a; . <(tr -d '\r' < ./.env); set +a
 [[ -n "${DB_PASSWORD:-}"        ]] || fail ".env 缺少 DB_PASSWORD"
 [[ -n "${MYSQL_ROOT_PASSWORD:-}" ]] || fail ".env 缺少 MYSQL_ROOT_PASSWORD"
+[[ -n "${REDIS_PASSWORD:-}"     ]] || fail ".env 缺少 REDIS_PASSWORD（第四轮审计：Redis 已启 requirepass）"
 [[ -n "${JWT_SECRET:-}"         ]] || fail ".env 缺少 JWT_SECRET"
-for v in DB_PASSWORD MYSQL_ROOT_PASSWORD JWT_SECRET; do
+for v in DB_PASSWORD MYSQL_ROOT_PASSWORD REDIS_PASSWORD JWT_SECRET; do
   case "${!v}" in
     *CHANGE_ME*|*change-me*) fail "$v 还是模板占位值，必须改掉（openssl rand -base64 24）" ;;
   esac

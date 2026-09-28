@@ -113,7 +113,14 @@ def ids_of(body):
 # ==================== 账号 ====================
 
 def login_or_register(base, email, password, nickname, fallback_email):
-    """先登录演示账号；失败再尝试注册一次性账号。返回 (token, uid, 来源说明) 或 (None, None, 原因)。"""
+    """先登录演示账号；失败再尝试注册一次性账号；注册被拒（已存在）则回登兜底账号。
+
+    返回 (token, uid, 来源说明) 或 (None, None, 原因)。
+
+    ⚠️ 第三步是"可复跑"的关键（脚本承诺"对任意 --site 可复跑"）：上一次走查
+    注册的 goldenpath_* 账号会留在库里，第二次走查必然 40901 ——
+    用同一口令回登即可，脚本因此可以重复执行，而不是每跑一次就多建两个账号。
+    """
     st, b = call(base + "/api/auth/login", "POST", {"email": email, "password": password})
     if code_of(b) == 0:
         d = data_of(b) or {}
@@ -125,7 +132,15 @@ def login_or_register(base, email, password, nickname, fallback_email):
     if code_of(b) == 0:
         d = data_of(b) or {}
         return d.get("accessToken"), (d.get("user") or {}).get("id"), "注册一次性账号(%s)" % fallback_email
-    return None, None, "登录失败(%s) 且注册失败(%s)" % (login_code, code_of(b))
+    register_code = code_of(b)
+
+    st, b2 = call(base + "/api/auth/login", "POST",
+                  {"email": fallback_email, "password": password})
+    if code_of(b2) == 0:
+        d = data_of(b2) or {}
+        return d.get("accessToken"), (d.get("user") or {}).get("id"), \
+            "复用上一次走查账号(%s)" % fallback_email
+    return None, None, "登录失败(%s) 且注册失败(%s)" % (login_code, register_code)
 
 
 # ==================== SSE（只读一条推送，不做完整客户端）====================

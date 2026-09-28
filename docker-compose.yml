@@ -36,10 +36,14 @@ services:
     #    而这是一个只读变量，只能在服务启动时设定、不能运行时改。
     #    MySQL 8.0 默认值恰好是 2，但显式写出来才能保证换 MySQL 版本/镜像时行为不变。
     #    （若这个值被改动，Sprint 4 的检索会静默失效 —— 搜索单字或短词返回空。）
+    # ⚠️ 关闭停用词过滤（2026-09-28 补）：默认停用词表含单字母 "a"，会让
+    #    "所有双字组都含 a" 的词（java → ja/av/va、kafka、data…）被 ngram
+    #    过滤吞掉、MATCH 恒 0 条（见 V13 迁移的完整取证）。
     command:
       - --character-set-server=utf8mb4
       - --collation-server=utf8mb4_unicode_ci
       - --ngram_token_size=2
+      - --innodb-ft-enable-stopword=OFF
       - --default-time-zone=+08:00
     volumes:
       - mysql-data:/var/lib/mysql
@@ -57,12 +61,17 @@ services:
   redis:
     image: redis:7-alpine
     restart: unless-stopped
+    environment:
+      # 第四轮审计：Redis 此前**无认证** —— 同一网络内任意容器（或被攻陷的后端进程）
+      # 可读写 SSE 票据 / 限流桶 / 会话撤销水位。现在强制要求口令；
+      # healthcheck 也必须带认证（开 requirepass 后未认证 PING 直接 NOAUTH）。
+      REDIS_PASSWORD: ${REDIS_PASSWORD:?请在 .env 中设置 REDIS_PASSWORD}
     # appendonly：计数走 Redis，开启 AOF 后重启不会丢增量
-    command: ["redis-server", "--appendonly", "yes"]
+    command: ["redis-server", "--appendonly", "yes", "--requirepass", "${REDIS_PASSWORD:?请在 .env 中设置 REDIS_PASSWORD}"]
     volumes:
       - redis-data:/data
     healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
+      test: ["CMD-SHELL", "redis-cli -a \"$$REDIS_PASSWORD\" --no-auth-warning ping | grep -q PONG"]
       interval: 10s
       timeout: 3s
       retries: 6
@@ -88,6 +97,7 @@ services:
       REDIS_HOST: redis
       REDIS_PORT: 6379
       REDIS_DB: 0
+      REDIS_PASSWORD: ${REDIS_PASSWORD:?请在 .env 中设置 REDIS_PASSWORD}
       # 生产环境必须由外部注入，代码里没有默认值（application.yml 写的就是 ${JWT_SECRET}）
       JWT_SECRET: ${JWT_SECRET:?请在 .env 中设置 JWT_SECRET}
       # 上传目录指向数据卷挂载点（Dockerfile 里已建好并设了属主）

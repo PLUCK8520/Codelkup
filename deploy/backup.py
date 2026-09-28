@@ -6,7 +6,8 @@
 为什么是脚本而不是一行 crontab（PRE-MORTEM T1-2）：
   "记得敲 mysqldump" 这种事，第一次忘就会在出事时才发现。
   脚本化后：**轮换有保证**（不会攒满磁盘）、**恢复命令打印在输出里**（出事时不用回忆）、
-  **密码不进命令行**（用 MYSQL_PWD 传给容器内的 mysqldump）。
+  **密码不进命令行**（`-e MYSQL_PWD` 的 name-only 形式 + 进程环境传递 ——
+  写成 `-e MYSQL_PWD=值` 会暴露在宿主 `ps` 里，2026-09-28 审计修正）。
 
 用法：
     python3 deploy/backup.py                    # 写到 ./backups/，保留最近 7 份
@@ -18,7 +19,7 @@
 
 恢复（脚本不自动恢复 —— 恢复是破坏性动作，必须人手确认）：
     gunzip -c backups/codelkup-<时间戳>.sql.gz | \\
-      docker compose exec -T -e MYSQL_PWD="$MYSQL_ROOT_PASSWORD" mysql \\
+      MYSQL_PWD="$MYSQL_ROOT_PASSWORD" docker compose exec -T -e MYSQL_PWD mysql \\
       mysql -uroot "$DB_NAME"
 
 退出码：0 成功；1 失败（缺 .env / 容器没起 / 导出为空等）
@@ -83,9 +84,12 @@ def restore_to_target(args, out_dir: Path, env: dict) -> int:
         return 1
 
     def mysql(extra: list, stdin_bytes=None):
-        cmd = ["docker", "compose", "exec", "-T", "-e", "MYSQL_PWD=" + env["MYSQL_ROOT_PASSWORD"],
+        # ⚠️ `-e MYSQL_PWD` 是 **name-only** 形式：值从宿主进程环境读入，不进 argv。
+        #    写成 "-e MYSQL_PWD=<值>" 会把 root 口令暴露在宿主 `ps`（2026-09-28 审计项）。
+        cmd = ["docker", "compose", "exec", "-T", "-e", "MYSQL_PWD",
                "mysql", "mysql", "-uroot"] + extra
-        p = subprocess.run(cmd, cwd=str(REPO_ROOT), input=stdin_bytes,
+        run_env = {**os.environ, "MYSQL_PWD": env["MYSQL_ROOT_PASSWORD"]}
+        p = subprocess.run(cmd, cwd=str(REPO_ROOT), input=stdin_bytes, env=run_env,
                            stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=600)
         return p.returncode, p.stdout.decode("utf-8", "replace"), p.stderr.decode("utf-8", "replace")
 
@@ -149,12 +153,12 @@ def main() -> int:
     stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
     target = out_dir / ("codelkup-%s.sql.gz" % stamp)
 
-    print("导出 %s（经 docker compose exec，密码用 MYSQL_PWD 传参、不进命令行）..." % db)
+    print("导出 %s（经 docker compose exec，密码走进程环境、不进命令行）..." % db)
     t0 = time.time()
     cmd = [
         "docker", "compose", "exec", "-T",
-        # 注意：-e 只把变量交给容器内进程，不会出现在宿主命令行里
-        "-e", "MYSQL_PWD=" + env["MYSQL_ROOT_PASSWORD"],
+        # ⚠️ name-only：argv 里只有变量名，值由下面的 env 传入（2026-09-28 审计项）
+        "-e", "MYSQL_PWD",
         "mysql",
         "mysqldump", "-uroot",
         "--single-transaction",   # InnoDB 一致性快照，不锁表（备份时站点照常可用）
@@ -162,7 +166,8 @@ def main() -> int:
         db,
     ]
     try:
-        proc = subprocess.run(cmd, cwd=str(REPO_ROOT), stdout=subprocess.PIPE,
+        proc = subprocess.run(cmd, cwd=str(REPO_ROOT), env={**os.environ, "MYSQL_PWD": env["MYSQL_ROOT_PASSWORD"]},
+                              stdout=subprocess.PIPE,
                               stderr=subprocess.PIPE, timeout=600)
     except FileNotFoundError:
         print("✗ 找不到 docker 命令（备份要在部署机 / 本机 compose 环境执行）")
