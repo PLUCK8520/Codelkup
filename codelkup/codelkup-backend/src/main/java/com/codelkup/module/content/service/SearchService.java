@@ -64,6 +64,23 @@ public class SearchService {
     private static final int MIN_FULLTEXT_LENGTH = 2;
 
     /**
+     * "全文 0 条时兜底 LIKE" 的查询词长度上限（码点）。
+     *
+     * <p>为什么需要这个兜底（2026-09-28 实测）：MySQL ngram 分词器的<b>停用词过滤</b>
+     * 会把"所有双字组都含字母 a"的词整个吞掉 —— 默认停用词表含单字母 "a"，
+     * 于是 {@code java}（ja/av/va）、{@code kafka}（ka/af/fa）、{@code data}（da/at/ta）
+     * 这类词在 {@code MATCH} 下<b>恒 0 条</b>（实测：{@code LIKE '%Java%'} 142 条、
+     * {@code MATCH('Java')} 0 条；隔离实验确认关闭 {@code innodb_ft_enable_stopword}
+     * 后立刻可搜，与本库数据无关）。
+     *
+     * <p>根治手段是 V13 迁移重建索引（去掉停用词）+ compose 启动参数关闭该变量；
+     * 这里是<b>第二道保险</b>：任何环境的索引状态不对时，短词搜索也不会
+     * "明明有内容却 0 条"。只在"全文 0 条 + 无空格 + 够短"时触发，
+     * 正常路径与长词查询完全不受影响。
+     */
+    private static final int LIKE_FALLBACK_MAX_LENGTH = 6;
+
+    /**
      * BOOLEAN MODE 下具有语法含义的字符。剥离理由见类注释（语义漂移）。
      *
      * <p>注意编译期的双重转义：Java 字符串 {@code "[+\\-><()~*\"@]"} 表示正则
@@ -81,11 +98,15 @@ public class SearchService {
      *
      * <p>{@code p.is_top DESC} 放在相关性<b>之后</b>：搜索时置顶帖不该无条件霸占首位，
      * 只在相关性持平时作为次级排序键。
+     *
+     * <p>片段末尾一律补 {@code p.id DESC}：短词搜索时 relevance 同分、{@code create_time}
+     * 又是秒精度，都不足以给出稳定顺序 —— 缺了兜底键，翻页会重复或漏项
+     * （与列表页、收藏列表同一口径）。
      */
     private static final Map<String, String> ORDER_BY_WHITELIST = Map.of(
-            "relevance", "relevance DESC, p.is_top DESC, p.create_time DESC",
-            "latest", "p.is_top DESC, p.create_time DESC",
-            "hot", "p.is_top DESC, p.score DESC, p.create_time DESC"
+            "relevance", "relevance DESC, p.is_top DESC, p.create_time DESC, p.id DESC",
+            "latest", "p.is_top DESC, p.create_time DESC, p.id DESC",
+            "hot", "p.is_top DESC, p.score DESC, p.create_time DESC, p.id DESC"
     );
 
     /** snippet 中关键词单侧保留的上下文字数 */
@@ -116,8 +137,11 @@ public class SearchService {
             return PageResult.empty(request.getPage(), request.getSize());
         }
 
-        // 短词降级：ngram 双字粒度下单字必然搜不到
-        boolean useLike = cleaned.length() < MIN_FULLTEXT_LENGTH;
+        // 短词降级：ngram 双字粒度下单字必然搜不到。
+        // ⚠️ 按**码点**而不是 UTF-16 长度判定：一个 emoji 在 Java 里 length() 是 2，
+        //    但它是单"字符"，走全文索引同样必然 0 条（ngram 的最小单位是字符）。
+        //    按码点数判定，emoji 才能正确降级到 LIKE 而不是"搜了没结果"。
+        boolean useLike = cleaned.codePointCount(0, cleaned.length()) < MIN_FULLTEXT_LENGTH;
         String likeQuery = useLike ? escapeLike(cleaned) : null;
         String orderBy = resolveOrderBy(request.getSort(), useLike);
 
@@ -125,6 +149,25 @@ public class SearchService {
         IPage<PostSearchRowVO> result = postMapper.searchPostPage(
                 page, cleaned, likeQuery, useLike,
                 request.getBoardId(), request.getTagId(), request.getAuthorId(), orderBy);
+
+        // ---- 兜底：全文 0 条 + 无空格的短词 → LIKE 重查一次 ----
+        // 动机见 LIKE_FALLBACK_MAX_LENGTH：ngram 停用词会吞掉 java 这类词，
+        // 使"库里明明有 142 条却返回 0 条"。只在最窄的条件下多做一次查询：
+        // ⚠️ 长词/多词短语若 0 条，基本是真的没有，不为它们扫全表 LIKE。
+        // ⚠️ 重查时排序必须回落时间序（LIKE 下 relevance 恒 0，按它排毫无意义）。
+        if (!useLike
+                && result.getTotal() == 0
+                && cleaned.indexOf(' ') < 0
+                && cleaned.codePointCount(0, cleaned.length()) <= LIKE_FALLBACK_MAX_LENGTH) {
+            log.debug("全文 0 条，短词兜底 LIKE 重查 | keyword={}", cleaned);
+            useLike = true;
+            likeQuery = escapeLike(cleaned);
+            orderBy = resolveOrderBy(request.getSort(), true);
+            page = new Page<>(request.getPage(), request.getSize());
+            result = postMapper.searchPostPage(
+                    page, cleaned, likeQuery, useLike,
+                    request.getBoardId(), request.getTagId(), request.getAuthorId(), orderBy);
+        }
 
         // ---- 转换：算出 snippet 后丢掉正文（正文绝不进响应体）----
         List<PostListVO> records = new ArrayList<>(result.getRecords().size());

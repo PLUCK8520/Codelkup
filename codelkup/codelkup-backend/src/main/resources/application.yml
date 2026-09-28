@@ -60,6 +60,9 @@ spring:
       host: ${REDIS_HOST:localhost}
       port: ${REDIS_PORT:6379}
       database: ${REDIS_DB:0}
+      # 第四轮审计：compose 栈的 Redis 已启 requirepass；本地 dev（手跑的 redis 容器）
+      # 未设口令 —— 默认空值让两种环境都能连，生产由 .env 强制提供。
+      password: ${REDIS_PASSWORD:}
       timeout: 3000ms
       lettuce:
         pool:

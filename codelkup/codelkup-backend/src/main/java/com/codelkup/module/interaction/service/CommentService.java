@@ -194,6 +194,11 @@ public class CommentService {
         counterService.addPostCount("comment", postId, 1);
         eventPublisher.publishEvent(CountChangedEvent.postComment(postId, 1));
 
+        // 刷新帖子的"最后活跃时间"：评论/回复也算活跃 ——
+        // sort=active 与热度衰减都看这一列（此前只有发帖会写它，
+        // 于是"活跃排序"实际退化成"发布时间排序"）
+        postMapper.touchLastActive(postId);
+
         // ---- Sprint 4：发通知 ----
         // 规则不是"总是通知楼主"，而是：
         //   回复某条评论 → 通知<b>被回复那条评论</b>的作者
@@ -226,20 +231,40 @@ public class CommentService {
             throw new BusinessException(ErrorCode.NOT_RESOURCE_OWNER);
         }
 
-        commentMapper.deleteById(commentId);
+        // ⚠️ 用**影响行数**判定：并发双删时只有一次返回 1 ——
+        //    若不看结果直接扣减，评论数会被扣两次
+        if (commentMapper.deleteById(commentId) == 0) {
+            log.info("评论已被并发删除，跳过计数扣减 | commentId={}", commentId);
+            return;
+        }
 
         counterService.addPostCount("comment", comment.getPostId(), -1);
         eventPublisher.publishEvent(CountChangedEvent.postComment(comment.getPostId(), -1));
+
+        // 被采纳的评论被删除：帖子上的采纳标记会变成"指向一条不存在的评论"——
+        // 列表仍显示"已解决"、详情却找不到答案，楼主也再没有入口改判。
+        // 这里清掉标记并收回已结算的声望（与改判同一口径）；条件更新保证
+        // 不会把并发产生的新采纳误清。
+        if (comment.getIsAccepted() != null && comment.getIsAccepted() == 1
+                && postMapper.clearAcceptedComment(comment.getPostId(), commentId) > 0) {
+            Post post = postMapper.selectById(comment.getPostId());
+            if (post != null && !comment.getAuthorId().equals(post.getAuthorId())) {
+                eventPublisher.publishEvent(ReputationEvent.acceptRevoked(comment.getAuthorId()));
+            }
+            log.info("被采纳的评论被删除，已清空采纳标记 | postId={} | commentId={}",
+                    comment.getPostId(), commentId);
+        }
 
         log.info("删除评论 | commentId={} | postId={} | operatorId={} | isAdmin={}",
                 commentId, comment.getPostId(), operatorId, isAdmin);
     }
 
     /**
-     * 采纳评论（仅楼主，仅提问帖）。
+     * 采纳评论（仅楼主，仅提问帖，仅一级评论）。
      *
-     * <p>采纳会先清掉该帖原有的采纳标记，再设置新的 ——
-     * 一篇帖子只能有一个被采纳答案。
+     * <p>一篇帖子只能有一个被采纳答案：改判时旧的采纳位会被清掉并收回声望。
+     * 采纳位用<b>条件更新（CAS）</b>抢占 —— 并发改判只有一个请求能成功，
+     * 另一个明确报"采纳状态已变化"，而不是双双成功、把声望结算两遍。
      */
     @Transactional(rollbackFor = Exception.class)
     public void accept(Long postId, Long commentId, Long operatorId) {
@@ -256,14 +281,44 @@ public class CommentService {
         if (comment == null || !comment.getPostId().equals(postId)) {
             throw new BusinessException(ErrorCode.COMMENT_NOT_FOUND);
         }
+        // 只允许采纳一级评论（与前端"只对根评论显示采纳按钮"同一口径）：
+        // 回复挂在根评论下，采纳一条回复会让"已采纳"标记在列表里无处安放
+        if (comment.getParentId() != null && comment.getParentId() != Comment.ROOT_PARENT_ID) {
+            throw new BusinessException(ErrorCode.PARAM_ERROR, "只能采纳一级评论");
+        }
 
-        // 清除旧的采纳（如果有）
-        Long oldAcceptedId = post.getAcceptedCommentId();
         // 「是否真的发生了改判」：重复采纳同一条评论是幂等的，不该再结算一次声望
+        Long oldAcceptedId = post.getAcceptedCommentId();
         boolean changed = !commentId.equals(oldAcceptedId);
-        if (oldAcceptedId != null && changed) {
+
+        if (!changed) {
+            // 幂等路径：补一次通知（保持既有语义），并把评论标记补正
+            //（防历史数据里"帖子指向它、它自己却没标 accepted"的不一致）
+            if (comment.getIsAccepted() == null || comment.getIsAccepted() != 1) {
+                comment.setIsAccepted(1);
+                commentMapper.updateById(comment);
+            }
+            eventPublisher.publishEvent(NotificationEvent.accept(
+                    comment.getAuthorId(), operatorId, postId));
+            log.info("重复采纳，幂等返回 | postId={} | commentId={}", postId, commentId);
+            return;
+        }
+
+        // ⚠️ 条件更新（CAS）：把"比对旧采纳位 + 写入新采纳位"压进一条 SQL。
+        // 并发改判时只有一个请求能改到行，另一个得 0 行 —— 必须放在所有副作用
+        // 之前，失败时整个事务回滚，不留下"声望发了一半"的中间态。
+        // 首次采纳与改判走两条语句：不用 <=>（MyBatis-Plus 的 SQL 解析器不认它，
+        // 见 PostMapper.casAcceptWhenEmpty 的说明）。
+        int updated = oldAcceptedId == null
+                ? postMapper.casAcceptWhenEmpty(postId, commentId)
+                : postMapper.casAcceptWhenSame(postId, commentId, oldAcceptedId);
+        if (updated == 0) {
+            throw new BusinessException(ErrorCode.PARAM_ERROR, "采纳状态已变化，请刷新后重试");
+        }
+
+        if (oldAcceptedId != null) {
             Comment old = commentMapper.selectById(oldAcceptedId);
-            if (old != null) {
+            if (old != null && old.getIsAccepted() != null && old.getIsAccepted() == 1) {
                 old.setIsAccepted(0);
                 commentMapper.updateById(old);
                 // 改判要收回已给出去的声望：否则"来回改采纳对象"能反复刷 +15
@@ -276,20 +331,15 @@ public class CommentService {
         comment.setIsAccepted(1);
         commentMapper.updateById(comment);
 
-        Post update = new Post();
-        update.setId(postId);
-        update.setAcceptedCommentId(commentId);
-        postMapper.updateById(update);
-
         // Sprint 4：通知被采纳评论的作者。
         // 「自己采纳自己」的情况（楼主回答自己的提问）由通知模块统一拦掉，此处不必判断。
         eventPublisher.publishEvent(NotificationEvent.accept(
                 comment.getAuthorId(), operatorId, postId));
 
-        // 声望：+15 给被采纳的回答者，但只给"别人的回答"且只在改判时结算一次。
-        // ⚠️ 通知保持原行为（不按 changed 过滤），避免改动既有通知语义 ——
-        //    本轮只把"会累积、会被人钻空子"的声望做成幂等。
-        if (changed && !comment.getAuthorId().equals(operatorId)) {
+        // 声望：+15 给被采纳的回答者，只给"别人的回答"。
+        // 幂等由上面的 changed 分支保证（重复采纳同一条在前文已经 return），
+        // 所以这里可以放心结算 —— 不会出现"点两次采纳发两次分"。
+        if (!comment.getAuthorId().equals(operatorId)) {
             eventPublisher.publishEvent(ReputationEvent.accepted(comment.getAuthorId()));
         }
 

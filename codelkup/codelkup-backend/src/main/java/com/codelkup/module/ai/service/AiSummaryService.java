@@ -89,7 +89,10 @@ public class AiSummaryService {
         }
 
         String input = truncateForSummary(plain, maxInputChars);
-        String contentHash = AiCallGuard.sha256Hex(input);
+        // 哈希取**完整正文**而不是截断后的 input：截断只影响进 prompt 的内容，
+        // 而缓存键必须覆盖整篇 —— 否则只改 6000 字之后的段落时哈希不变、
+        // 缓存永不失效，用户拿到的还是旧摘要（比没有摘要更糟）。
+        String contentHash = AiCallGuard.sha256Hex(plain);
         String cacheKey = RedisKeys.AI_SUMMARY_CACHE + postId + ":" + contentHash;
 
         // ① 缓存：命中直接返回（不调用、不计费）

@@ -58,11 +58,15 @@ public class PostServiceImpl implements PostService {
      * <p>{@code orderBy} 最终会以 {@code ${}} 形式拼进 SQL，所以<b>绝不能</b>直接
      * 使用请求参数。改为查表映射：请求里的 sort 字符串 → 固定 SQL 片段，
      * 命中不了就回落 latest。这是防 SQL 注入的关键一道。
+     *
+     * <p>片段末尾一律补 {@code p.id DESC} 作为兜底键：{@code create_time} 是秒精度、
+     * {@code score} 是浮点，并列几乎必然出现；缺了它 MySQL 对并列行的顺序不作保证，
+     * 翻页会重复或漏项（与收藏列表那边同一个坑，见 {@code selectCollectedPostPage}）。
      */
     private static final Map<String, String> ORDER_BY_WHITELIST = Map.of(
-            "latest", "p.is_top DESC, p.create_time DESC",
-            "hot", "p.is_top DESC, p.score DESC, p.create_time DESC",
-            "active", "p.is_top DESC, p.last_active DESC"
+            "latest", "p.is_top DESC, p.create_time DESC, p.id DESC",
+            "hot", "p.is_top DESC, p.score DESC, p.create_time DESC, p.id DESC",
+            "active", "p.is_top DESC, p.last_active DESC, p.id DESC"
     );
 
     private final PostMapper postMapper;
@@ -323,7 +327,13 @@ public class PostServiceImpl implements PostService {
         update.setStatus(isAdmin && !existing.getAuthorId().equals(operatorId)
                 ? Post.STATUS_BANNED : Post.STATUS_DELETED);
         postMapper.updateById(update);
-        postMapper.deleteById(id);
+        // ⚠️ 用**影响行数**判定"这次删除是不是真的发生了"：并发双删时只有一次
+        //    deleteById 返回 1，另一次返回 0 —— 若不看结果直接往下走，
+        //    板块/标签计数会被扣两次（帖子却只少了一篇）。
+        if (postMapper.deleteById(id) == 0) {
+            log.info("帖子已被并发删除，跳过计数扣减 | postId={}", id);
+            return;
+        }
 
         boardService.addPostCount(existing.getBoardId(), -1);
 

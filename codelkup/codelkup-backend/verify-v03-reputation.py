@@ -22,7 +22,9 @@ V0.3 M2 验收 —— 声望与等级（t_user.reputation / level）是否真的
 from __future__ import annotations
 
 import argparse
+import io
 import json
+import os
 import socket
 import subprocess
 import sys

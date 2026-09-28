@@ -182,7 +182,52 @@ public interface PostMapper extends BaseMapper<Post> {
             """)
     Map<String, Object> countAllQuestionStats();
 
+    /**
+     * 采纳位的条件更新（CAS）—— 并发改判时只有一个请求能成功。
+     *
+     * <p>原实现是"读出 accepted_comment_id → 覆盖写"的纯读改写：两个请求同时改判
+     * 会双双成功，旧采纳者被收回声望、新采纳者被 +15，各自的结算都跑一遍。
+     * 条件更新把"比对 + 写入"压进一条 SQL（由 InnoDB 行锁串行化），
+     * 影响行数为 0 即说明期间已被别人改过，调用方据此放弃本次操作。
+     *
+     * <p>⚠️ <b>拆成"空 / 非空"两条普通 SQL，而不是用 NULL 安全等号 {@code <=>}</b>：
+     * {@code MybatisPlusConfig} 注册的 {@code BlockAttackInnerInterceptor} 会用
+     * JSQLParser 解析 UPDATE 语句，而它不认识 {@code <=>} —— 实测直接抛
+     * {@code MybatisPlusException: Failed to process}（接口返回 50001）。
+     * 两条语句与 {@code <=>} 语义完全等价，且解析器认。
+     */
+    @Update("UPDATE t_post SET accepted_comment_id = #{newId} "
+            + "WHERE id = #{postId} AND accepted_comment_id IS NULL AND deleted = 0")
+    int casAcceptWhenEmpty(@Param("postId") Long postId, @Param("newId") Long newId);
+
+    /** 采纳位的条件更新（CAS）—— 改判：旧采纳位非空且仍等于读到的那个值 */
+    @Update("UPDATE t_post SET accepted_comment_id = #{newId} "
+            + "WHERE id = #{postId} AND accepted_comment_id = #{oldId} AND deleted = 0")
+    int casAcceptWhenSame(@Param("postId") Long postId, @Param("newId") Long newId,
+                          @Param("oldId") Long oldId);
+
+    /**
+     * 清空采纳位 —— 被采纳的评论被删除时调用。
+     *
+     * <p>不清的话帖子会一辈子挂着"已解决"：列表按 {@code accepted_comment_id IS NOT NULL}
+     * 判定解决状态，而详情里的采纳标记却指向一条已不存在的评论，楼主也再没有入口改判。
+     * 同样用条件更新：仅当采纳位仍是这条评论时才清，避免把并发产生的新采纳误清。
+     */
+    @Update("UPDATE t_post SET accepted_comment_id = NULL "
+            + "WHERE id = #{postId} AND accepted_comment_id = #{commentId} AND deleted = 0")
+    int clearAcceptedComment(@Param("postId") Long postId, @Param("commentId") Long commentId);
+
     // ==================== 热度分（V0.3） ====================
+
+    /**
+     * 刷新"最后活跃时间"（评论 / 回复成功时调用）。
+     *
+     * <p>它不是展示字段而是排序字段：{@code sort=active} 按它排、热度分的衰减也按它算。
+     * 此前只有发帖会写它，于是"活跃排序"实际退化成"发布时间排序" ——
+     * 一个半年前发的高热帖不会因为今天的讨论重新浮起来，而那正是这个字段的全部意义。
+     */
+    @Update("UPDATE t_post SET last_active = NOW() WHERE id = #{postId} AND deleted = 0")
+    int touchLastActive(@Param("postId") Long postId);
 
     /**
      * 全量重算热度分 —— <b>一条 SQL</b>，不做逐帖 update。

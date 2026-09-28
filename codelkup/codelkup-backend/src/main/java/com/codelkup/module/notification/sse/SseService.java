@@ -142,8 +142,11 @@ public class SseService {
             }
             int sep = value.indexOf('|');
             if (sep < 0) {
-                // 兼容旧格式（纯 userId）：没有绑定信息的老票直接按旧语义放行
-                return Long.valueOf(value);
+                // 无分隔符 = 非本实现签发的票（正常签发一定带 "|绑定信息"）。
+                // ⚠️ 这里**不放行**（第四轮审计）：旧分支直接按纯 userId 放行，
+                // 会跳过 IP 绑定与撤销水位两道校验 —— 宁可拒一张来历不明的票。
+                log.warn("SSE ticket 格式非法（缺少绑定信息），拒绝");
+                return null;
             }
             Long userId = Long.valueOf(value.substring(0, sep));
             String rest = value.substring(sep + 1);

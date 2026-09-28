@@ -179,9 +179,21 @@ public class UserServiceImpl implements UserService {
             if (claims != null) {
                 tokenStore.blacklistAccessToken(claims);
             }
+            // access 已过期时 parse 返回 null，这里静默放过 —— 属预期：
+            // 凭证本就无效，前端会走"401 → 刷新 → 重试"的链路补一次登出，
+            // 服务端不必为过期 token 额外特判。
         }
         if (userId != null) {
             tokenStore.removeRefreshToken(userId);
+            // 广播会话撤销事件（与改密同一机制）：关掉该用户已建立的 SSE 长连接。
+            // 只删 refresh 白名单管不住已经握手的长连接 —— 否则"已登出"的会话
+            // 还能继续白拿实时通知；多标签页共享同一账号，一起下线才是正确语义。
+            eventPublisher.publishEvent(new UserSessionRevokedEvent(userId));
+            // 用户级撤销水位（第四轮审计补）：refresh 是单槽位，删掉它等于"全端不能再刷新"，
+            // 但**他设备手里还没过期的 access** 仍能活到自然过期（≤30 分钟）——
+            // 被盗 refresh 换来的 access 还能继续读数据、甚至换一张 SSE 票。
+            // 与改密同一条水位机制，把"登出=全端下线"补完整（同秒签发的 token 不受影响）。
+            tokenStore.revokeAccessBefore(userId, Instant.now().getEpochSecond());
         }
         log.info("登出 | userId={}", userId);
     }

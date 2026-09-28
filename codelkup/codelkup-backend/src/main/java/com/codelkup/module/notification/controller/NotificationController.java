@@ -54,7 +54,12 @@ public class NotificationController {
             @RequestParam(defaultValue = "20")
             @Min(value = 1, message = "每页最少 1 条")
             @Max(value = 50, message = "每页最多 50 条") Integer size) {
-        return Result.success(notificationService.list(userId, onlyUnread, type, page, size));
+        // ⚠️ type 是客户端可控的重复参数（?type=1&type=1&… 可以传上千个）：
+        //    去重 + 封顶，避免拼出超长 IN 列表打 SQL 解析（第四轮审计）。
+        //    通知类型枚举总数 < 16，limit(16) 不会影响任何正常用法。
+        List<Integer> types = type == null ? null
+                : type.stream().distinct().limit(16).toList();
+        return Result.success(notificationService.list(userId, onlyUnread, types, page, size));
     }
 
     @Operation(summary = "各类型未读数",

@@ -82,17 +82,25 @@ public class CounterService {
      * 但那样会掩盖真正的 bug（比如重复取消点赞）。宁可让它短暂为负、
      * 由重建脚本发现并修正，也不要静默吞掉异常信号。
      *
-     * <p>但如果 key 不存在，{@code DECR} 会从 0 减到 -1 —— 这是错的，
-     * 因为真值应该是"MySQL 基线 - 1"而不是 "-1"。所以先用 {@code SETNX}
-     * 把 key 初始化成当前基线值，再做增量。用 Lua 保证这两步原子。
+     * <h2>惰性基线（为什么不再先取基线）</h2>
+     * 旧实现先把"当前 MySQL 基线"读出来、再让 Lua 拿它作初值 INCR —— 但调用点
+     * （点赞/收藏/评论）都发生在同一事务里，明细行<b>已可见</b>，所以读到的所谓
+     * "基线"其实是"变更后"的值，再 INCR 就多加了 1：<b>首次点赞显示 2</b>。
+     *
+     * <p>现在改为<b>惰性</b>：热路径只有 1 次 Lua（key 不存在就用本次增量占位
+     * 并返回 1），只有真正发生"首次写入"时才回库取一次基线做校准
+     * （{@link #repairIfUnchanged}）——正常路径不再为了一个已经存在的 key
+     * 多打一次 COUNT 查询。
      */
     public void addPostCount(String dimension, Long postId, long delta) {
         String key = postCountKey(dimension, postId);
         try {
-            redis.execute(INCR_WITH_BASELINE_SCRIPT,
-                    List.of(key),
-                    String.valueOf(delta),
-                    String.valueOf(baselineOf(dimension, postId)));
+            Long miss = redis.execute(INCR_OR_MISS_SCRIPT, List.of(key), String.valueOf(delta));
+            if (miss != null && miss == 1L) {
+                // key 不存在：Lua 已把本次增量写成占位值；这里取"变更后基线"覆盖它。
+                // 取变更后值是安全的：明细行在同一事务内可见，countByTarget 已把 delta 算进去
+                repairIfUnchanged(key, delta, baselineOf(dimension, postId));
+            }
         } catch (Exception e) {
             // Redis 不可用：静默降级，MySQL 基线仍会被更新
             log.warn("Redis 计数失败，降级为仅更新 MySQL | key={} | delta={} | err={}",
@@ -100,39 +108,73 @@ public class CounterService {
         }
     }
 
-    /** 评论点赞数增减（key 初始化基线从 t_comment.like_count 取） */
+    /**
+     * 评论点赞数增减（同惰性基线）。
+     *
+     * <p>评论的基线列由计数事件<b>异步落库</b>（AFTER_COMMIT），所以事务里读到的
+     * {@code t_comment.like_count} 仍是"变更前"值 —— 校准值时要把本次 delta 加上。
+     */
     public void addCommentLikeCount(Long commentId, long delta) {
         String key = commentCountKey(commentId);
         try {
-            Integer baseline = commentMapper.selectById(commentId) == null
-                    ? 0 : commentMapper.selectById(commentId).getLikeCount();
-            redis.execute(INCR_WITH_BASELINE_SCRIPT,
-                    List.of(key),
-                    String.valueOf(delta),
-                    String.valueOf(baseline == null ? 0 : baseline));
+            Long miss = redis.execute(INCR_OR_MISS_SCRIPT, List.of(key), String.valueOf(delta));
+            if (miss != null && miss == 1L) {
+                var comment = commentMapper.selectById(commentId);
+                int before = comment == null || comment.getLikeCount() == null
+                        ? 0 : comment.getLikeCount();
+                repairIfUnchanged(key, delta, before + (int) delta);
+            }
         } catch (Exception e) {
             log.warn("评论点赞计数失败 | commentId={} | err={}", commentId, e.getMessage());
         }
     }
 
     /**
-     * 计数增减脚本：key 不存在时先以基线初始化，再执行增量。
+     * 计数脚本（惰性基线）。
      *
-     * <p>原子性用 Lua 保证 —— 若分成 SETNX + INCR 两条命令，
-     * 并发下会出现"两个请求都 SETNX 失败、都去 INCR"以外的更糟情况：
-     * A 刚 SETNX 成功、B 的 INCR 就到了，B 读到的是基线但其实是 A 初始化前的状态。
-     * 放进一段 Lua 里由 Redis 单线程执行，这些交错都不会发生。
-     *
-     * <p>{@code ARGV[1]}=增量，{@code ARGV[2]}=基线值。
+     * <p>key 不存在 → 用本次增量占位写入并返回 1；已存在 → INCRBY 并返回 0。
+     * Redis 单线程执行保证"判断存在 + 写入"是原子的：不会出现两个请求都按
+     * "首次"处理，也不会出现"一个刚初始化、另一个读到初始化前状态"的交错。
      */
     private static final org.springframework.data.redis.core.script.DefaultRedisScript<Long>
-            INCR_WITH_BASELINE_SCRIPT = new org.springframework.data.redis.core.script.DefaultRedisScript<>(
+            INCR_OR_MISS_SCRIPT = new org.springframework.data.redis.core.script.DefaultRedisScript<>(
             """
             if redis.call('EXISTS', KEYS[1]) == 0 then
-                redis.call('SET', KEYS[1], ARGV[2])
+                redis.call('SET', KEYS[1], ARGV[1])
+                return 1
             end
-            return redis.call('INCRBY', KEYS[1], ARGV[1])
+            redis.call('INCRBY', KEYS[1], ARGV[1])
+            return 0
             """, Long.class);
+
+    /**
+     * 基线校准脚本：仅当 key 当前值仍等于占位值时才覆盖为库侧基线（CAS）。
+     *
+     * <p>若期间有并发写把值改掉了（值 ≠ 占位值），说明那份状态已被别的请求
+     * 接手 —— 直接覆盖会把它算进去的增量抹掉。放弃校准、交给重建脚本兜底，
+     * 是这种情况下更安全的选择。
+     *
+     * <p>{@code ARGV[1]}=占位值（本次 delta），{@code ARGV[2]}=库侧基线。
+     */
+    private static final org.springframework.data.redis.core.script.DefaultRedisScript<Long>
+            REPAIR_IF_UNCHANGED_SCRIPT = new org.springframework.data.redis.core.script.DefaultRedisScript<>(
+            """
+            if redis.call('GET', KEYS[1]) == ARGV[1] then
+                redis.call('SET', KEYS[1], ARGV[2])
+                return 1
+            end
+            return 0
+            """, Long.class);
+
+    /** 取库侧基线覆盖占位值（只在 key 首次被写入、且期间无并发写时生效） */
+    private void repairIfUnchanged(String key, long placeholder, int baseline) {
+        try {
+            redis.execute(REPAIR_IF_UNCHANGED_SCRIPT, List.of(key),
+                    String.valueOf(placeholder), String.valueOf(baseline));
+        } catch (Exception e) {
+            log.warn("计数基线校准失败（由重建脚本兜底）| key={} | err={}", key, e.getMessage());
+        }
+    }
 
     // ==================== 读取：Redis 优先，miss 回填 ====================
 
@@ -151,7 +193,7 @@ public class CounterService {
             }
             // 未命中：从 MySQL 基线回填
             int baseline = baselineOf(dimension, postId);
-            // ⚠️ 必须 SETNX（第三轮审计 C1）：与"首次点赞"的 Lua（不存在则 SET 基线再 INCR）
+            // ⚠️ 必须 SETNX（第三轮审计 C1）：与"首次写入"的计数脚本（见 INCR_OR_MISS_SCRIPT）
             //    并发时，普通 SET 会把刚 INCR 的结果覆盖回旧基线 → Redis 比 MySQL 少 1，
             //    且要等到下次重建才自愈。SETNX 失败说明 key 已被并发方初始化：改读它的现值返回。
             Boolean initialized = redis.opsForValue().setIfAbsent(key, String.valueOf(baseline));

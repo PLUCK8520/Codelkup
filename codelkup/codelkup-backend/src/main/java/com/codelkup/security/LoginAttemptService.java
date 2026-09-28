@@ -6,9 +6,10 @@ import com.codelkup.common.result.ErrorCode;
 import lombok.RequiredArgsConstructor;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.data.redis.core.StringRedisTemplate;
+import org.springframework.data.redis.core.script.DefaultRedisScript;
 import org.springframework.stereotype.Service;
 
-import java.util.concurrent.TimeUnit;
+import java.util.List;
 
 /**
  * 登录失败计数与限流。
@@ -154,11 +155,29 @@ public class LoginAttemptService {
         stringRedisTemplate.delete(pwdChangeKey(userId));
     }
 
-    /** INCR 并在首次计数时设置过期（每次都续期会导致"永远锁定"） */
+    /**
+     * 计数脚本：INCR + 补过期，用 Lua 保证原子。
+     *
+     * <p>修复点：旧实现分两条命令 —— {@code INCR} 成功、仅当 {@code count == 1} 时
+     * 才 {@code EXPIRE}。若 EXPIRE 那一步丢失（连接中断 / 进程崩溃 / 网络抖动），
+     * 这个 key 就<b>永久不过期</b>：用户被永久锁死，且没有任何自愈入口。
+     *
+     * <p>放进一段 Lua 后由 Redis 单线程执行，两条命令同生共死；判定条件也改成
+     * "TTL 为负才补"（而不是"仅首次"）—— 即便历史上已经留下过无过期的 key，
+     * 也会在下一次计数时自动补上过期时间。
+     */
+    private static final DefaultRedisScript<Long> INCR_WITH_TTL_SCRIPT = new DefaultRedisScript<>(
+            """
+            local count = redis.call('INCR', KEYS[1])
+            if redis.call('TTL', KEYS[1]) < 0 then
+                redis.call('EXPIRE', KEYS[1], ARGV[1])
+            end
+            return count
+            """, Long.class);
+
+    /** INCR 并保证有过期（"每次续期导致永不锁定"不会发生：只在 TTL 为负时才设置） */
     private void increment(String key, int windowMinutes) {
-        Long count = stringRedisTemplate.opsForValue().increment(key);
-        if (count != null && count == 1L) {
-            stringRedisTemplate.expire(key, windowMinutes, TimeUnit.MINUTES);
-        }
+        stringRedisTemplate.execute(
+                INCR_WITH_TTL_SCRIPT, List.of(key), String.valueOf(windowMinutes * 60L));
     }
 }

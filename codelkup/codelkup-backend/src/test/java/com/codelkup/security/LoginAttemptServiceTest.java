@@ -7,12 +7,20 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.data.redis.core.ValueOperations;
+import org.springframework.data.redis.core.script.RedisScript;
 
+import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.List;
+import java.util.Map;
 import java.util.concurrent.TimeUnit;
 
 import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyList;
+import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
@@ -85,28 +93,51 @@ class LoginAttemptServiceTest {
 
     // ==================== 记录阶段：两个维度都要计数 ====================
 
-    @Test
-    void recordFailure_incrementsBothDimensions_withTheirOwnWindows() {
-        when(ops.increment(anyString())).thenReturn(1L);
-
-        service.recordFailure(IP, EMAIL);
-
-        verify(ops).increment(RedisKeys.LOGIN_FAIL_COUNT + IP + ":" + EMAIL);
-        verify(ops).increment(RedisKeys.LOGIN_FAIL_BY_IP + IP);
-        // 细粒度 15 分钟、粗粒度 10 分钟 —— 两个窗口不同，别写混
-        verify(redis).expire(RedisKeys.LOGIN_FAIL_COUNT + IP + ":" + EMAIL, 15L, TimeUnit.MINUTES);
-        verify(redis).expire(RedisKeys.LOGIN_FAIL_BY_IP + IP, 10L, TimeUnit.MINUTES);
+    /**
+     * 捕获 {@code execute(...)} 的调用参数并让脚本返回 1。
+     *
+     * <p>返回列表的每个元素是一次调用的参数数组：{@code [0]=script}、{@code [1]=keys}、
+     * 之后是展开的变长参数（本类实现只传一个参数 —— TTL 秒数，
+     * 所以取 {@code args[args.length - 1]} 即它）。
+     */
+    private List<Object[]> captureIncrements() {
+        List<Object[]> calls = new ArrayList<>();
+        when(redis.execute(any(RedisScript.class), anyList(), any())).thenAnswer(inv -> {
+            calls.add(inv.getArguments());
+            return 1L;
+        });
+        return calls;
     }
 
     @Test
-    void recordFailure_doesNotRenewTtl_whenCounterAlreadyExists() {
-        when(ops.increment(anyString())).thenReturn(3L);
+    void recordFailure_incrementsBothDimensions_withTheirOwnWindows() {
+        List<Object[]> calls = captureIncrements();
 
         service.recordFailure(IP, EMAIL);
 
-        // 每次都续期会让窗口永不结束（攻击者只需保持低频即可永久锁定别人）
-        verify(redis, never()).expire(anyString(), org.mockito.ArgumentMatchers.anyLong(),
-                org.mockito.ArgumentMatchers.any(TimeUnit.class));
+        // ★ 实现已改为"INCR + 补过期"的单条 Lua（旧实现分两条命令，EXPIRE 丢失会永久锁死）。
+        //   这里钉两件事：两个 key 都被计数、窗口秒数没有写混（15min=900s / 10min=600s）。
+        Map<String, String> ttlByKey = new HashMap<>();
+        for (Object[] args : calls) {
+            ttlByKey.put(((List<?>) args[1]).get(0).toString(),
+                    args[args.length - 1].toString());
+        }
+        assertEquals(Map.of(
+                RedisKeys.LOGIN_FAIL_COUNT + IP + ":" + EMAIL, "900",
+                RedisKeys.LOGIN_FAIL_BY_IP + IP, "600"), ttlByKey);
+        // Java 侧不再直接 EXPIRE：过期由 Lua 在同一次原子执行里完成
+        verify(redis, never()).expire(anyString(), anyLong(), any(TimeUnit.class));
+    }
+
+    @Test
+    void recordFailure_neverRenewsTtlFromJavaSide() {
+        // 续期判定已下沉到 Lua（只在 TTL < 0 时补 EXPIRE，实现"自愈"而不是"续期"）——
+        // Java 侧一旦出现直接 expire()，就意味着"每次失败都续期 → 窗口永不结束"回归了
+        when(redis.execute(any(RedisScript.class), anyList(), any())).thenReturn(3L);
+
+        service.recordFailure(IP, EMAIL);
+
+        verify(redis, never()).expire(anyString(), anyLong(), any(TimeUnit.class));
     }
 
     // ==================== 清除阶段：只清细粒度 ====================
@@ -144,14 +175,15 @@ class LoginAttemptServiceTest {
 
     @Test
     void pwdChange_recordFailure_usesUserDimension_withLockWindow() {
-        when(ops.increment(anyString())).thenReturn(1L);
+        List<Object[]> calls = captureIncrements();
 
         service.recordPasswordChangeFailure(42L);
 
-        verify(ops).increment(PWD_KEY_42);
-        verify(redis).expire(PWD_KEY_42, 15L, TimeUnit.MINUTES);
         // 只记 userId 一个维度：不能顺带污染登录的 IP/邮箱计数键
-        verify(ops, times(1)).increment(anyString());
+        assertEquals(1, calls.size());
+        assertEquals(List.of(PWD_KEY_42), calls.get(0)[1]);
+        // 窗口 15 分钟 = 900 秒（与登录锁定同一口径）
+        assertEquals("900", calls.get(0)[calls.get(0).length - 1].toString());
     }
 
     @Test
