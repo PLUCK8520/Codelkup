@@ -188,7 +188,7 @@ function onAskAi() {
           <span class="brand-mark" aria-hidden="true">
             <!-- 鹰标（2026-09-29）：圆形深底徽章 —— 用户提供的低多边形鹰原画，
                  圆形裁切后内嵌 SVG（public/brand-mark.svg）；favicon 同源同图 -->
-            <img src="/brand-mark.svg" alt="" width="30" height="30" />
+            <img src="/brand-mark.svg?v=2" alt="" width="30" height="30" />
           </span>
           <span class="brand-name">Codelkup</span>
         </router-link>

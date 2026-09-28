@@ -67,7 +67,7 @@ async function onSubmit() {
       <!-- 品牌 -->
       <RouterLink :to="{ name: 'home' }" class="auth-brand">
         <span class="brand-mark" aria-hidden="true">
-          <img src="/brand-mark.svg" alt="" width="30" height="30" />
+          <img src="/brand-mark.svg?v=2" alt="" width="30" height="30" />
         </span>
         <span class="brand-name">Codelkup</span>
       </RouterLink>
