@@ -628,3 +628,65 @@ flowchart TD
      - **双证核对**：`git log --oneline -S "<字面量>"` **为空**（全历史无该内容）+ `git grep` **HEAD 干净** + 工作区干净。
      - **旧历史仍在本地 `refs/original/refs/heads/master`**（filter-branch 的安全备份，便于反悔）。**它不会被推送**（push 只送新历史）；若想彻底抹掉本地旧对象：`git update-ref -d refs/original/refs/heads/master && git reflog expire --expire=now --all && git gc --prune=now`（建议**推送成功后再执行**）。
      - 副作用：所有提交 hash 变化（新历史：`3fb8497` v0.4 → `3f3b825`/`db05c60`/`46ed6e8`/`552a517`/`b52064d`/`cf65217`/`fe16069` → `9b66c5e`（本轮））。
+54. **全项目逻辑体检与 Wave 1 修复（10 项后端逻辑缺陷）+ UI v5 试点（2026-09-28 凌晨）**：
+   - **口径**：用户指令"先把项目所有的逻辑修复好"。四路**只读** agent 并行做全项目逻辑体检（内容/检索、互动/通知、用户/上传/AI、前端），每条发现先由我复核代码与实测，再修、再跑对应套件。
+   - **后端修复（10 项，全部有证据与验收）**：
+     1. **`last_active` 死字段**：评论/回复成功不刷新它 → `sort=active` 退化成"发布时间排序"、热度衰减按创建时间算。修：`PostMapper.touchLastActive` + `CommentService.create` 调用（`:197-200`）。
+     2. **列表/搜索排序缺 `id DESC` 兜底键**：秒级 `create_time`/浮点 `score` 并列时翻页会重复或漏项。修：`PostServiceImpl`/`SearchService` 白名单三处补齐；**并顺藤发现由此引入 filesort 回归**（EXPLAIN：4967 行 sort）→ 见备注 55-⑥ 的 V12 迁移。
+     3. **搜索短词降级按 UTF-16 长度判定**：emoji（`length()==2`、1 个码点）被误判为"够长"走 fulltext → 恒 0 条。修：`codePointCount`（`SearchService:127`）。
+     4. **计数"首次点赞显示 2"**：旧实现把"变更后基线"当初值再 INCR（同事务明细已可见 → 多算 1）。修：**惰性基线** —— `INCR_OR_MISS_SCRIPT`（不存在则占位并返回 1）+ `REPAIR_IF_UNCHANGED_SCRIPT`（CAS 校准，期间有并发写则放弃、交重建兜底）；正常路径少打一次 COUNT。
+     5. **并发双采纳可双结算声望**：纯读改写 → CAS 条件更新（`casAcceptWhenEmpty/Same`；**因 MyBatis-Plus 解析器限制拆两条 SQL，见备注 55-①**）。
+     6. **采纳层级**：允许采纳"回复"（两级树的第二层）→ 改为只允许一级评论，与前端"只对根评论显示采纳按钮"同一口径。
+     7. **删除被采纳评论留下悬挂采纳位**：帖子仍显示"已解决"却指向不存在的评论、楼主无法改判。修：`clearAcceptedComment`（条件更新）+ 收回声望（`acceptRevoked`）。
+     8. **删除不看影响行数**：评论并发双删会重复扣评论数；帖子并发双删会重复扣板块/标签计数。修：两处都用 `deleteById(...) > 0` 守住。
+     9. **登录/改密锁定 INCR/EXPIRE 非原子**：EXPIRE 丢失 → 永久锁死。修：单条 Lua（`TTL<0` 补过期，历史残留键自愈）；单测同步重写为"钉新契约"（key 与窗口秒数）。
+     10. **TL;DR 缓存哈希只覆盖前 6000 字**：改后文不失效。修：对**完整正文**取哈希（`AiSummaryService:95`）。
+   - **验收（全绿）**：单测 **100/100**（`mvn -B verify` BUILD SUCCESS）；`verify-sprint1.py` 44/44、`verify-sprint2.py` 92/92、`verify-sprint3.py` 79/79、`verify-sprint4.py` **105/105**、`verify-v03-questions.py` 21/21、`verify-v03-reputation.py` 17/17、`verify-v03-score.py` 9/9、`verify-v03-experience.py` 27/27、`verify-v03-collections.py` 23/23、`verify-v03-metrics.py` 22/22、`verify-v03-password.py` 25/25、`verify-v03-sse.py` 35/35、金路径 **44/44**；前端 9 套 **266/266** + `npm run build` ✓。
+   - **UI v5 试点（用户主导方向，明日继续）**：设计令牌升级为 v5「深石墨工作台」（双色帕 `#17181C + #FF5623`、层叠灰表面、硬边形态、蓝图网格、玻璃/光晕全下线）+ 顶栏（⌘K 聚焦搜索 / 页脚真实信号）/ 首页 / 帖子卡（工单编号）/ 详情页（720px 阅读区）四处样板间。浏览器实测 6/6、WCAG 对比度 18/18 达标；**用户将明日参与 UI 的最终调整**（当前改动已落盘、未提交）。
+55. **第四轮安全审计（后端 / 数据库 / 中间件）与 9 项修复（2026-09-28 凌晨）**：
+   - **口径**：用户指令"检查后端和数据库以及中间件的问题"。四路**只读** agent 按域清查（① 鉴权与会话 ② 注入·上传·AI ③ 数据库 schema/迁移 ④ 中间件与部署暴露面），每条要求 `文件:行号` 证据；我逐条复核关键证据链（读被引用代码、本机 EXPLAIN、runtime `curl -I`、配置语法三验），**不落盘审计工件**（与前几轮一致）。
+   - **复核既往修复**：F1（refresh CAS）、F2（会话撤销关 SSE）、F3（限流 TTL 自愈）、C1（SETNX 回填）、C7（AI 引用可见性）、L-1~L-4、M-1、HS256 钉死、XFF 采信 —— **全部仍成立（无回退）**。
+   - **修复清单（9 项）**：
+     1. **【high，我引入的回归】采纳 CAS 的 `<=>` 被解析器拒绝**：`BlockAttackInnerInterceptor` 用 JSQLParser 解析 UPDATE，不认 NULL 安全等号 → `MybatisPlusException: Failed to process` → 采纳全链路 50001（`backend-run.log` 有完整栈）。修：拆成 `accepted_comment_id IS NULL` / `= #{oldId}` 两条**语义等价**的 SQL。验收：6 套失败件全部转绿（105/21/27/17/22/9）。
+     2. **【medium】登出未撤销他设备 access**：改密有"用户级撤销水位"，登出没有 → 被盗 refresh 换来的 access 可活到自然过期（≤30 分钟）且能换 SSE 票。修：`logout` 补 `revokeAccessBefore`（与 refresh 单槽位语义一致：登出=全端下线）。验收：SSE **35/35**（含改密断流/水位）、密码 **25/25**、金路径 **44/44**。
+     3. **【medium】Redis 无认证**（compose 只有 `--appendonly`）：同网络任意容器可读写票据/限流桶/撤销水位。修：`--requirepass`（healthcheck 带 `-a` 认证）+ 后端 `spring.data.redis.password: ${REDIS_PASSWORD:}` + `.env.production.example` + `deploy.sh` 强制校验。验收：`docker compose config` / `bash -n deploy.sh` / `nginx -t` **均 exit 0**。
+     4. **【medium】备份脚本把 root 口令放进宿主 argv**：`-e MYSQL_PWD=<值>` 在宿主 `ps` 可见，且原注释写反。修：`-e MYSQL_PWD`（name-only）+ 进程环境传递；文档与恢复命令示例同步。
+     5. **【medium】Nginx 静态层缺安全响应头**：补 `X-Content-Type-Options: nosniff` / `X-Frame-Options: DENY` / `Referrer-Policy`（处理 nginx "location 自带 add_header 则父级全部失效"的覆盖继承陷阱，四处重复声明）；runtime 复核：后端 `/uploads` 与 API 路径本就有 Spring Security 默认头。
+     6. **【medium】`p.id DESC` 兜底键致列表排序退化为 filesort**（EXPLAIN 实证：`Using filesort`，sort 4967 行；根因 InnoDB 隐式主键后缀是 **ASC**）。修：**V12 迁移**重建 4 条索引（`idx_list_latest/hot/active` + `idx_board_list_latest`，末列显式 `id DESC`；顺带补上 active 排序从未有过的索引）。复验：四条查询全部命中新索引、**无 filesort**。
+     7. **【low】SSE ticket 兼容分支跳过校验**：值无 `|` 时直接按纯 userId 放行（跳过 IP 绑定与撤销水位）。修：改为拒绝（正常签发必带绑定信息）。
+     8. **【low】通知 `type` 重复参数可上千**（超长 IN）：去重 + 封顶 16（类型枚举 <16，不影响正常用法）。
+     9. **【low】验收资产的两处缺陷**：金路径脚本"不可复跑"（残留 `goldenpath_*` 账号 → 40901 后无回登兜底）→ 补"复用上一次走查账号"路径（复跑实测 **44/44**）；`verify-v03-reputation.py` / `verify-v03-metrics.py` 缺 `import os/io`（备注 53 凭据清洗遗留，NameError 不可运行）→ 修复后各自 **17/17**、**22/22**。
+   - **复核后判定"记录不修"（附理由）**：匿名单字搜索可致全表 LIKE（`/api/search` 匿名可达且无限流桶）→ 建议加 IP/用户搜索限流桶；**"只搜标题"会破坏既有验收口径（sprint4 按 `INSTR(content)` 对账），需产品决策**。评论列表全量返回无上限（既有取舍：注释已写明"单帖到万级再改分页"）。软删用户邮箱仍占唯一键（潜在；当前无删号入口）。计数字段无 DB CHECK（可接受）。seed-demo 默认口令入库（demo 账号性质）。Swagger/健康端点公网可读（文档明确"有意公开"，演示加分项）；SSE ticket 走 URL 会被 access log 留存（建议日志屏蔽 query）。封禁不关 SSE（当前无封禁 API）。**需部署事实才能定性**：Redis protected-mode、TLS/HSTS 终止点、防火墙（仓库只暴露 WEB_PORT）。
+   - **数字口径（总数=分项之和）**：后端 **747** / 单测 **100** / 前端契约 **266** / 金路径 **44** 均**不变**（本轮未新增断言；reputation/metrics 两套"曾不可运行"已修复复验）。**上线自检 27・28 待补**：compose/nginx 本轮有改动，需在 `.env` 补 `REDIS_PASSWORD` 后 `docker compose up -d --build` 复跑（本轮未起 compose 栈，如实记录）。
+   - **归档教训**：① **解析器兼容性也是真实缺陷面** —— `<=>` 过得了 MySQL、过不了 MyBatis-Plus 解析链；新增 SQL 必须跑一次真实请求而不是只编译通过。② **EXPLAIN 是"排序键能否被索引满足"的唯一判据** —— InnoDB 隐式主键后缀是 ASC，`ORDER BY ... , id DESC` 会破坏索引序；加兜底键必须同步给索引。③ **两阶段跑法是硬约束** —— 本轮两次踩坑（自起型/附着型混跑；自起型跑在已占用的 8085 上），症状都是"脚本崩溃"，但根因都在编排。
+   - **补跑闭合（2026-09-28 当日追加，用户问"后端都验收了吗"后的如实补齐）**：上线自检在 compose 栈（8090，`.env` 补 `REDIS_PASSWORD` 后 `docker compose up -d --build`、四容器 healthy）复跑 **27/27（开态）**；三个此前未在最终代码上复跑的套件补齐 —— `verify-v05-reports.py` **60/60**、`verify-v04-regswitch.py` **8/8**、`verify-v03-upload.py` **27/27**（后者按项目口径用专用阈值后端起：`--codelkup.rate-limit.upload-per-hour=3 --codelkup.upload.max-files-per-user=10`）。至此口径全闭合且**全部在最终代码上**：后端 **747**（自起型 535 + 附着型 212）+ 单测 **100** + 前端契约 **266** + 金路径 **44** + 上线自检 **27/27**。跑完已把 dev 后端恢复为日常配置（热度压秒级调度）。
+56. **UI v6「白纸浅蓝」整体翻转 + 布局重构（2026-09-28，用户第五轮 UI 反馈）**：
+   - **口径**：用户指令原文"先把我的背景换成白的，主题颜色换成浅蓝，还有这些ui布局是时候改了"。执行前先用 AskUserQuestion 与用户对齐**布局改造范围**（他此前对"自作主张"不满）：用户勾选"全站一次到位 + 首页信息流 + 帖子详情页 + 表单/账号页"，首页形态选"列表 + 右侧栏（掘金 / V2EX 同款）"。配色不凭感觉 —— 取值全部对照可查证的行业参照（GitHub Light / Tailwind blue / 掘金 #1E80FF 蓝系）并经 WCAG 脚本实测。
+   - **配色 v6「白纸浅蓝」（推翻 v5 深石墨 + 橙；v5 试点见备注 54，本轮即"用户明日参与的最终调整"）**：
+     - 表面：页面底 `#F5F8FC`（蓝调灰白）+ 白卡 `#FFFFFF` + hover `#F8FAFD`（GitHub Light 的"底与卡差一档"层次法）；发丝边改为 `rgba(15,23,42,·)` 四档。
+     - 主色（Tailwind blue 档）：文字/链接 `#1D4ED8`（白底 6.7:1）、实心按钮 `#2563EB` + **白字**（5.17:1）；软底 9% 蓝、hover 变深一档。参照：GitHub `#0969DA` / Stack Overflow `#0A95FF` / 掘金 `#1E80FF` 同区间。
+     - 文字三档：`#0F172A` / `#475569` / `#5B6B80`（弱化档是**自调**值：slate-500 `#64748B` 只有 4.3:1 不达标，取 slate-500/600 之间的达标款）。
+     - 语义色深一档（v5 亮色在浅底上全不达标）：danger `#DC2626` / success `#15803D` / warning `#B45309`；徽标软底 9~10% + 深字（如 `#92400E`）。
+     - 代码块改 **GitHub Light 方案**（`#F6F8FA` 底 + `#1F2937` 字 + 行内码 `#CF222E`），浅色页面不再嵌"深色黑洞"。
+     - 阴影全部改"低透明度 + 负扩散"柔影；v5 的"硬印章"（2px 实心位移）全线下线，`--shadow-lift` 语义改为"纸片轻浮"（蓝 18%）。
+     - Element Plus 覆写：light-N 按主色**混白 30/50/70/80/90% 手算**（防双蓝并置）；**v5"深色字压橙底"规则删除**（蓝底配白字本已达标，规则若保留反而制造缺陷）。
+   - **布局重构（v6 核心是"扫得快"）**：
+     - **PostCard 大卡 → 紧凑行式**（全站 8 个列表页共用：首页/板块/标签/问答/搜索/关注/收藏/个人主页）：行高 ~150px → **~99px**（浏览器实测 98.8px）；左侧 52px 计数条收进底行右侧（图标 + 数字，"有互动点亮主色"语义保留）；摘要 2 行 → 单行省略；hover 改"底色 + 边框"两条通道（行式列表不位移，避免整列"晃"）；置顶左条、badge、搜索高亮全部保留。`PostListSkeleton` 同步改行式（骨架与真卡不同形比没骨架更糟）。
+     - 首页：Hero 的橙光晕**删除**、网格纹理改浅蓝令牌（全站仅此一处）；列表行距 12 → 8px；"列表 + 右侧栏"（板块 / 标签 / 活跃作者）成型。
+     - 详情页 / 顶栏 / 编辑器等：硬印章 hover 全部改柔浮；品牌标识、通知角标、LevelBadge 等随令牌自动翻转；登录/注册页加一层 9% 蓝氛围光（纯令牌实现，无写死色值）。
+   - **顺手修掉 1 个真实缺陷（与 v5 同类错误）**：`MarkdownEditor` 移动端"编辑/预览"激活按钮是**深色字压蓝底**（3.35:1，不达标）→ 改白字。
+   - **清理**：MarkdownViewer 4 处 v5 写死色、CommentItem 采纳边 rgba、BoardListView 玻璃残留清零；删除 `--glass-*` / `--inset-highlight` 令牌（引用已确认全部迁移）；`index.html` theme-color 改 `#F5F8FC`；favicon 早年为蓝（`#2563eb`，v5 转橙时漏改）—— 本轮品牌蓝与它重新对齐，无需改动。
+   - **验收**：`wcag-contrast.py` 升级 v6（新增 rgba 软底合成 + 徽标文字用例）**33/33**；`npm run build`（vue-tsc + vite）✓ exit 0；浏览器实测（首页 / 详情 / 代码块验收帖 / 登录 / 板块）色值逐项吻合、console **0 报错**。**如实记录的未验证项**：1440 宽下首页两栏布局未亲验（本机浏览器视口仅 916px，命中 1024px 断点属设计内行为；两栏 grid 逻辑未改）。
+   - **状态**：改动已落盘、**未提交**（无 remote，沿用既有口径）。
+57. **搜索缺陷「Java 0 条」修复 + UI v6.2（双列 / 横排带）+ 品牌图标重设计（2026-09-28 晚）**：
+   - **口径**：用户在验收 UI 时发现搜索「Java」0 条（同屏「Spring」1184 条，而库里 LIKE 有 142 条）；先要求"现在就修（兜底 + 根治）"，随后逐条指定 UI 调整（右栏横排到顶部 / 帖子双列"像小红书" / 问答页同步 / 图标重新设计，四候选对比后拍板 A 方案）。
+   - **根因（隔离实验闭环，不是猜测）**：MySQL ngram 分词器的**停用词过滤**会吞掉"所有双字组都含字母 a"的词 —— 默认停用词表含单字母 "a"，`java`（ja/av/va）、`kafka`（ka/af/fa）、`data`（da/at/ta）的 MATCH **恒 0 条**。证据链：① `LIKE '%Java%'`=142 / `MATCH('Java')`=0；② **全新表**复现（与本库无关）；③ 会话内关闭 `innodb_ft_enable_stopword` 后立刻可搜；④ dev 与 compose 两套环境都复现。
+   - **修复三层（全部落盘）**：
+     1. **V13 迁移**：`SET SESSION innodb_ft_enable_stopword = OFF` 后重建 `ft_title_content`（停用词属性是"建索引时记账"，只改配置不重建无效）；dev 实跑 4.07s，`Java` 0 → **142**。
+     2. **compose 启动参数** `--innodb-ft-enable-stopword=OFF`（管"今后新建的索引"）。
+     3. **SearchService 兜底**：全文 0 条 + 无空格短词（≤6 码点）→ 自动 LIKE 重查。**验证**：把索引临时还原成坏状态 → API 仍返回 142（日志"全文 0 条，短词兜底 LIKE 重查"）→ 恢复后走主路径。
+   - **回归（全部在修复后的代码上）**：单测 **100/100**；sprint2 **92/92**、sprint3 **79/79**、sprint4 **105/105**（自起型，每套前清限流桶——首轮曾因 sprint1 自测打满注册桶产生 42901 假失败，按既有流程修正后全绿）。**金路径 44/44、上线自检 27/27**（对恢复后的 compose 栈实测）。⚠️ **镜像重建属部署动作、不是验收项**：MySQL 参数写在 compose 的启动命令里，**重启容器即生效**（27/27 即跑在"旧镜像 + 新配置"上）；本轮多余地跑了 `up --build` 触发全镜像重建、压垮引擎（见教训④⑤），**镜像重建留到真正部署时再做**——用户不部署就不碰 compose。
+   - **UI v6.2（用户逐条指定，均截图验证）**：① 9 个列表页 860 → **1040** 宽（消灭 1440 桌面两侧各 290px 空白）；② 首页/板块页右栏三卡移到 Hero 下方**横排一排**（板块卡内 2 列降高）、帖子流改**双列网格**（同行等高，顺序 1,2/3,4，窄屏回单列）、骨架同步双列；③ 问答页双列 + tab 改下划线式 + 去页头重复分隔线；④ 详情页正文卡内居中；⑤ 首页 Hero 改"左文案/右统计"双栏降高。
+   - **品牌图标重设计**：用户拼贴风参考图 → 16px 实测糊（对比页存证）→ "提炼版"仍不满意 → **重新设计四候选**（终端 `>_` / `</>` / 括号+放大镜 / `<·>`，见 `.workbuddy/ui-review/icon-variants.png`）→ 用户拍板 **A·终端 `>_`** → favicon + 顶栏 + 登录/注册全部替换；favicon 引用加 `?v=2` 防浏览器缓存。
+   - **归档教训**：① **停用词是 ngram 检索的隐形杀手**（换 MySQL 版本/镜像后必须复验 "java" 可搜）。② **favicon 的一次 Edit 未真实落盘**（Read 显示"已改"但磁盘/构建产物仍旧——编辑器缓存层与文件系统不一致）；此后该文件改用 shell 直写 + build 产物三重核对。③ **vite dev 的 public 目录改动不热更新**（favicon 需重启 dev server）；且 PowerShell 读无 charset 的 svg 响应会乱码，版本检查要用 ASCII 坐标特征。④ **compose 构建（`--build`）是部署动作，不是验收动作**：服务配置类改动（如 MySQL 启动参数）**重启容器即生效**，无需重建镜像；本轮误用 `--build` 触发四镜像全量重建，把本就紧张的内存压垮（引擎被拖死 → WSL2 假死，牵连 dev Redis 与用户登录）。**原则：用户没说要部署就不碰 compose。**⑤ **引擎被压垮后"重启 Docker Desktop"救不回来**：日志定案（`Wsl/Service/0x8007274c` + enginedependencies 持续 ping 超时 = WSL2 VM 假死），需 **`wsl --shutdown`** 重建子系统；恢复后 compose 容器按 restart 策略自动起，dev 的手动容器 `codelkup-redis` 需单独拉起（守卫脚本已做）。
+   - **状态**：改动已落盘、**未提交**（无 remote，沿用既有口径）。

@@ -519,6 +519,12 @@ SHOW VARIABLES LIKE 'ngram_token_size';
 |---|---|---|
 | E4 | 访问不存在的路径返回 `50001 系统错误`（语义错误，应为 404） | 配置 `spring.mvc.throw-exception-if-no-handler-found=true` + `spring.web.resources.add-mappings=false`，使其抛 `NoHandlerFoundException` 并被全局处理器正确捕获 |
 
+**2026-09-28 追加 —— ngram 停用词坑（Sprint 4 收口后实测发现并闭环）**
+
+| # | 发现 | 影响 | 处置 |
+|---|---|---|---|
+| E5 | **InnoDB 停用词过滤会吞"所有双字组都含字母 a"的词**（默认停用词表含单字母 `a`）：`java`(ja/av/va)、`kafka`(ka/af/fa)、`data`(da/at/ta) 这类词 `MATCH` **恒 0 条** —— 实测 `LIKE '%Java%'` 142 条、`MATCH('Java')` 0 条；隔离实验（全新表）复现，关闭 `innodb_ft_enable_stopword` 后立刻可搜 | 社区第一关键词「java」搜索返回 0 条（dev 与 compose 两套环境均实测复现） | ① compose 加 `--innodb-ft-enable-stopword=OFF`；② **V13 迁移**在 `SET SESSION` 关停用词后**重建** `ft_title_content`（停用词属性是"建索引时记账"，只改配置不重建索引无效）；③ `SearchService` 加"全文 0 条 + 无空格短词 → LIKE 重查"作为第二道保险 |
+
 
 ## 8.6 Assumptions（未验证的假设）
 

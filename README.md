@@ -81,7 +81,7 @@ npm run dev
 | 点赞 / 收藏防重 | 数据库唯一索引 `uk_user_target_action` 兜底（而非"先查再写"），捕获 `DuplicateKeyException` 幂等返回 |
 | "Redis 挂了怎么办" | 计数 = **MySQL 可重建基线 + Redis 实时增量**；Lua 脚本原子处理"key 不存在先 SET 基线再 INCR" |
 | 计数漂移 | 幂等重建脚本（从明细表 `COUNT(*)` 反查，全用 SET/UPDATE 覆盖不用增量），`driftCount` 量化偏差 |
-| 中文检索 | `ngram_token_size=2` 硬约束：单字无法成 token → LIKE 降级；BOOLEAN 操作符会语义漂移 → 输入清洗 |
+| 中文检索 | `ngram_token_size=2` 硬约束：单字无法成 token → LIKE 降级；**停用词会吞"含字母 a 的英文短词"（java/kafka/data → MATCH 恒 0 条）→ 关停用词 + V13 重建索引 + 0 条兜底**；BOOLEAN 操作符会语义漂移 → 输入清洗 |
 | 评论树 | 两级设计：`parentId` 归一化到根 + `reply_user_id` 保留"回复谁"，一次查询 O(n) 分组，无递归无 N+1 |
 | XSS | 后端只返回 Markdown 原文；前端 DOMPurify 消毒 + 纯文本切片高亮（不用 `v-html`） |
 

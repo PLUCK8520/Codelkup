@@ -61,7 +61,7 @@ git clone <你的仓库地址> codelkup && cd codelkup
 
 # ③ 配置密钥（两个密码 + JWT 用 openssl 生成强随机值）
 cp deploy/.env.production.example .env
-openssl rand -base64 24   # → 填 MYSQL_ROOT_PASSWORD / DB_PASSWORD
+openssl rand -base64 24   # → 填 MYSQL_ROOT_PASSWORD / DB_PASSWORD / REDIS_PASSWORD
 openssl rand -base64 48   # → 填 JWT_SECRET
 vi .env                   # 同时按内存填 JVM_MAX_RAM_PERCENTAGE、按方案填 WEB_PORT/CORS
 
@@ -132,7 +132,7 @@ systemctl reload caddy
 **不建议**在演示站放管理员账号密码：公网谁都能删帖/置顶。需要演示管理功能时，自己临时提权：
 
 ```bash
-docker compose exec mysql mysql -uroot -p"$MYSQL_ROOT_PASSWORD" codelkup \
+docker compose exec -e MYSQL_PWD="$MYSQL_ROOT_PASSWORD" mysql mysql -uroot codelkup \
   -e "UPDATE t_user SET role=2 WHERE email='ab@codelkup.dev';"
 # ⚠️ role 写在用户表里，JWT 只带 uid —— 改完必须**重新登录**才生效
 ```
@@ -152,7 +152,7 @@ docker compose restart backend          # 重启后端（改 .env 后需要）
 docker compose up -d --build            # 拉新代码后重建
 docker compose down                     # 停止（数据保留在 volume，不会丢）
 
-# 备份数据库（脚本：dump + gzip + 自动轮换 7 份；密码走 MYSQL_PWD，不进命令行/不进日志）
+# 备份数据库（脚本：dump + gzip + 自动轮换 7 份；密码经进程环境以 `-e MYSQL_PWD`（name-only）传入，不进命令行/不进日志）
 python3 deploy/backup.py                              # 导出到 ./backups/
 python3 deploy/backup.py --list                       # 列出已有备份（含大小）
 python3 deploy/backup.py --restore-to codelkup_restoretest   # 恢复演练：临时库核对行数，拒绝落到线上库名
@@ -161,7 +161,7 @@ python3 deploy/backup.py --restore-to codelkup_restoretest   # 恢复演练：�
 # 30 3 * * * cd /opt/codelkup && /usr/bin/python3 deploy/backup.py >> /var/log/codelkup-backup.log 2>&1
 
 # 真实回滚（破坏性动作，确认后再执行）：
-# gunzip -c backups/<时间戳>.sql.gz | docker compose exec -T -e MYSQL_PWD="$MYSQL_ROOT_PASSWORD" mysql mysql -uroot codelkup
+# gunzip -c backups/<时间戳>.sql.gz | MYSQL_PWD="$MYSQL_ROOT_PASSWORD" docker compose exec -T -e MYSQL_PWD mysql mysql -uroot codelkup
 
 # 计数对账（Redis 与明细表偏差）
 # 管理员登录后调用重建接口（会返回 driftCount）：POST /api/admin/counters/rebuild
@@ -222,12 +222,12 @@ RAG 问答与长帖 TL;DR **共用同一把用户限流** —— 各给一份等
 **用日志算账**（`t_ai_answer_log` 只记指纹、不记问题原文）：
 
 ```bash
-docker compose exec mysql mysql -uroot -p"$MYSQL_ROOT_PASSWORD" codelkup -e "
+docker compose exec -e MYSQL_PWD="$MYSQL_ROOT_PASSWORD" mysql mysql -uroot codelkup -e "
   SELECT COUNT(*) AS calls, SUM(cache_hit) AS cached, SUM(degraded) AS degraded, SUM(total_tokens) AS tokens
   FROM t_ai_answer_log WHERE create_time >= CURDATE();"
 
-# 当日预算计数（Redis）
-docker compose exec redis redis-cli GET "codelkup:ai:budget:$(date +%F)"
+# 当日预算计数（Redis；第四轮审计起 Redis 已启 requirepass，必须带 -a）
+docker compose exec redis redis-cli -a "$REDIS_PASSWORD" --no-auth-warning GET "codelkup:ai:budget:$(date +%F)"
 ```
 
 **渲染边界**：AI 输出一律**纯文本**渲染（前端把答案切成"文本段 / 引用段"再 v-for，不走 `v-html`）。
