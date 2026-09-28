@@ -3,10 +3,12 @@
 """批次之间清一次"按 IP 计"的限流桶（全量回归的前置动作）。
 
 为什么需要它：验收脚本各自注册用户，而**注册限流是按 IP 5 次/小时**、查重限流是
-30 次/10 分钟 —— 不清就会出现"上一个脚本把下一个脚本挡在 42901"的**假失败**
-（看起来像功能坏了，实际是我们自己把额度用完了，见 TASKS 备注 10 / 33）。
+30 次/10 分钟、**搜索限流（第五轮审计新增）匿名按 IP 60 次/小时** ——
+不清就会出现"上一个脚本把下一个脚本挡在 42901"的**假失败**
+（看起来像功能坏了，实际是我们自己把额度用完了，见 TASKS 备注 10 / 33 / 58）。
+搜索桶尤其要清：sprint4 一套就有 50+ 次搜索，且它用匿名桶（按 IP），跨套复跑必撞。
 
-⚠️ 只清两类前缀：`codelkup:rate:register:*` 与 `codelkup:rate:check_email:*`。
+⚠️ 只清四类前缀：register / check_email / search / search_ip（都是"按 IP 计"的**额度类**桶）。
 **绝不碰 `codelkup:auth:*`** —— 那里是 refresh 白名单与登录失败锁（误删会把所有
 已登录会话的刷新能力清掉，本机踩过一次，见 TASKS 备注 7）。
 
@@ -47,7 +49,8 @@ def redis_cmd(*args: str) -> str:
 
 def clear() -> int:
     victims = []
-    for pattern in ("codelkup:rate:register:*", "codelkup:rate:check_email:*"):
+    for pattern in ("codelkup:rate:register:*", "codelkup:rate:check_email:*",
+                    "codelkup:rate:search:*", "codelkup:rate:search_ip:*"):
         resp = redis_cmd("KEYS", pattern)
         victims += [line for line in resp.split("\r\n") if line.startswith("codelkup:")]
     if victims:
@@ -57,6 +60,6 @@ def clear() -> int:
 
 if __name__ == "__main__":
     try:
-        print(f"已清理按 IP 计的限流桶：{clear()} 个（register / check_email）")
+        print(f"已清理按 IP 计的限流桶：{clear()} 个（register / check_email / search / search_ip）")
     except OSError as e:
         print(f"连不上 Redis，跳过（{e}）")

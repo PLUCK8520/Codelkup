@@ -189,6 +189,13 @@ codelkup:
     # 相似问题提示：300 次/小时/用户（编辑器里边写边问，去抖后一次会话约 20~50 次；
     # 不调 LLM，只是检索 + 重排，所以额度给得比 AI 问答宽）
     similar-per-hour: ${RATE_LIMIT_SIMILAR_PER_HOUR:300}
+    # 搜索：登录 300 次/小时/用户、匿名 60 次/小时/IP（2026-09-28 第五轮安全审计补齐）。
+    # ⚠️ 这是全站唯一"匿名可达且可能触发全表 LIKE"的接口：单字符查询必然降级 LIKE，
+    #    2~6 码点短词的"全文 0 条兜底"也会补一次全表扫（content 为万行级 mediumtext）——
+    #    此前没有桶，等于一条匿名 DoS 路径；匿名额度更紧（无成本），
+    #    登录额度与 similar 同档（正常使用远低于此）。
+    search-per-hour: ${RATE_LIMIT_SEARCH_PER_HOUR:300}
+    search-ip-per-hour: ${RATE_LIMIT_SEARCH_IP_PER_HOUR:60}
     # RAG 问答 + 长帖 TL;DR：10 次/小时/用户（ALIGNMENT 口径）。
     # ⚠️ 两者**共用这一个桶**：都真花钱，分开计等于把每人的额度翻倍 ——
     #    "AI 生成类调用按用户 10/小时"才是成本闸门的原意。
