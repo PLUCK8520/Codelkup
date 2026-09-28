@@ -186,17 +186,9 @@ function onAskAi() {
         <!-- Logo -->
         <router-link :to="{ name: 'home' }" class="brand">
           <span class="brand-mark" aria-hidden="true">
-            <!-- 提炼版标识（2026-09-28）：蓝底由 .brand-mark 提供，这里只画
-                 斜切折带与尖括号（currentColor → 随 --color-on-accent） -->
-            <svg viewBox="0 0 32 32" width="30" height="30" aria-hidden="true">
-              <path d="M32 5 V17 L17 32 H5 Z" fill="currentColor" opacity="0.16" />
-              <path d="M0 27 L27 0 H32 V5 L5 32 H0 Z" fill="currentColor" opacity="0.10" />
-              <g fill="none" stroke="currentColor" stroke-width="3"
-                 stroke-linecap="round" stroke-linejoin="round">
-                <polyline points="10.5 9.5 17.5 16 10.5 22.5" />
-              </g>
-              <rect x="20" y="20.2" width="6.8" height="3" rx="1.5" fill="currentColor" />
-            </svg>
+            <!-- 鹰标（2026-09-29）：圆形深底徽章 —— 用户提供的低多边形鹰原画，
+                 圆形裁切后内嵌 SVG（public/brand-mark.svg）；favicon 同源同图 -->
+            <img src="/brand-mark.svg" alt="" width="30" height="30" />
           </span>
           <span class="brand-name">Codelkup</span>
         </router-link>
@@ -428,20 +420,21 @@ function onAskAi() {
   color: var(--color-foreground);
 }
 
-/* 品牌标识：蓝底白字（#2563EB + 白 = 5.2:1，对比度实测见 wcag-contrast.py）。
-   投影是"纸片轻浮"（蓝调柔影），与全站 v6 的 hover 语言一致。 */
+/* 品牌标识：圆形深底鹰徽（2026-09-29 用户提供原画，深底与圆都在图片里）。
+   容器只负责尺寸与 hover 位移；轻投影让深色徽章在白页上"浮"住。 */
 .brand-mark {
   display: grid;
   place-items: center;
   width: 30px;
   height: 30px;
-  border-radius: var(--radius-md);
-  /* 折带是直角到边的，必须裁进圆角（否则四角露白块） */
-  overflow: hidden;
-  background: var(--color-accent-solid);
-  color: var(--color-on-accent);
-  box-shadow: var(--shadow-lift);
-  transition: box-shadow var(--transition-base), transform var(--transition-fast);
+  transition: transform var(--transition-fast);
+}
+
+.brand-mark img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  filter: drop-shadow(0 1px 2px rgba(15, 23, 42, 0.18));
 }
 
 .brand:hover .brand-mark {
