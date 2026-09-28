@@ -74,6 +74,19 @@ class LoginAttemptServiceTest {
     }
 
     @Test
+    void pureEmailDimension_blocksAtThreshold_acrossIps() {
+        // 第五轮审计 #1：伪造 IP（每次换新键）时，纯邮箱维度必须仍然拦得住
+        when(ops.get(RedisKeys.LOGIN_FAIL_BY_IP + "1.2.3.4")).thenReturn(null);
+        when(ops.get(RedisKeys.LOGIN_FAIL_COUNT + "email:" + EMAIL)).thenReturn("15");
+        when(ops.get(RedisKeys.LOGIN_FAIL_COUNT + "1.2.3.4" + ":" + EMAIL)).thenReturn(null);
+
+        BusinessException e = assertThrows(BusinessException.class,
+                () -> service.checkNotLocked("1.2.3.4", EMAIL));
+
+        assertEquals(ErrorCode.TOO_MANY_REQUESTS, e.getErrorCode());
+    }
+
+    @Test
     void emailDimension_blocksAtThreshold() {
         when(ops.get(RedisKeys.LOGIN_FAIL_BY_IP + IP)).thenReturn(null);
         when(ops.get(RedisKeys.LOGIN_FAIL_COUNT + IP + ":" + EMAIL)).thenReturn("5");
@@ -110,13 +123,14 @@ class LoginAttemptServiceTest {
     }
 
     @Test
-    void recordFailure_incrementsBothDimensions_withTheirOwnWindows() {
+    void recordFailure_incrementsAllThreeDimensions_withTheirOwnWindows() {
         List<Object[]> calls = captureIncrements();
 
         service.recordFailure(IP, EMAIL);
 
         // ★ 实现已改为"INCR + 补过期"的单条 Lua（旧实现分两条命令，EXPIRE 丢失会永久锁死）。
-        //   这里钉两件事：两个 key 都被计数、窗口秒数没有写混（15min=900s / 10min=600s）。
+        //   这里钉三件事：三个 key 都被计数、窗口秒数没有写混
+        //   （IP+邮箱 15min=900s / IP 10min=600s / 邮箱 60min=3600s，第五轮审计 #1 补）。
         Map<String, String> ttlByKey = new HashMap<>();
         for (Object[] args : calls) {
             ttlByKey.put(((List<?>) args[1]).get(0).toString(),
@@ -124,7 +138,8 @@ class LoginAttemptServiceTest {
         }
         assertEquals(Map.of(
                 RedisKeys.LOGIN_FAIL_COUNT + IP + ":" + EMAIL, "900",
-                RedisKeys.LOGIN_FAIL_BY_IP + IP, "600"), ttlByKey);
+                RedisKeys.LOGIN_FAIL_BY_IP + IP, "600",
+                RedisKeys.LOGIN_FAIL_COUNT + "email:" + EMAIL, "3600"), ttlByKey);
         // Java 侧不再直接 EXPIRE：过期由 Lua 在同一次原子执行里完成
         verify(redis, never()).expire(anyString(), anyLong(), any(TimeUnit.class));
     }
@@ -140,16 +155,18 @@ class LoginAttemptServiceTest {
         verify(redis, never()).expire(anyString(), anyLong(), any(TimeUnit.class));
     }
 
-    // ==================== 清除阶段：只清细粒度 ====================
+    // ==================== 清除阶段：清"账号绑定"键，不清 IP 维度 ====================
 
     @Test
-    void clearFailure_clearsOnlyEmailDimension() {
+    void clearFailure_clearsBothAccountBindings_notIpDimension() {
         service.clearFailure(IP, EMAIL);
 
+        // 清两个"账号绑定"键：IP+邮箱、纯邮箱（本人自证，防跨 IP 累计误锁 —— 审计 #1）
         verify(redis).delete(RedisKeys.LOGIN_FAIL_COUNT + IP + ":" + EMAIL);
+        verify(redis).delete(RedisKeys.LOGIN_FAIL_COUNT + "email:" + EMAIL);
         // 成功登录不该抹掉 IP 维度的攻击痕迹，否则分片喷洒可用"自己账号登一次"清零
         verify(redis, never()).delete(RedisKeys.LOGIN_FAIL_BY_IP + IP);
-        verify(redis, times(1)).delete(anyString());
+        verify(redis, times(2)).delete(anyString());
     }
 
     // ==================== 改密失败锁定（M-1 修复：userId 维度） ====================

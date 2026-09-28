@@ -26,7 +26,11 @@ COPY . .
 RUN npm run build
 
 # ---------------- 阶段 2：运行 ----------------
-FROM nginx:1.25-alpine
+# nginx：从"已停更的 1.25（2024 年）"换到官方 stable 分支 —— 第五轮审计 #7。
+# 策略说明：镜像 tag 钉到"家族 + 渠道"（stable-alpine / mysql:8.0 / redis:7-alpine），
+# 而**不**钉 digest —— digest 会把安全补丁一并锁死，个人项目无法承担
+# "忘记 bump 就永远不升级"的代价。
+FROM nginx:stable-alpine
 
 # 自定义 server 块：SPA 路由回退 + 反向代理到后端
 COPY nginx.conf /etc/nginx/conf.d/default.conf

@@ -13,6 +13,16 @@ mybatis-plus:
   configuration:
     log-impl: org.apache.ibatis.logging.nologging.NoLoggingImpl   # 生产不打印 SQL
 
+# API 文档（springdoc / Swagger UI）在生产关闭（2026-09-29 第五轮审计 #2b）：
+# 匿名可读的接口清单 + 字段模型是攻击者的"地图"；生产不需要它，
+# 演示走 dev（默认 profile，不受此处影响）。deploy/verify-deploy.py 已同步改为
+# 断言"公网不可达"。
+springdoc:
+  api-docs:
+    enabled: false
+  swagger-ui:
+    enabled: false
+
 codelkup:
   jwt:
     secret: ${JWT_SECRET}         # 必填

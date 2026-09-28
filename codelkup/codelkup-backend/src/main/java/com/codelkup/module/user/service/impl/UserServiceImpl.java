@@ -98,7 +98,7 @@ public class UserServiceImpl implements UserService {
         } catch (DuplicateKeyException e) {
             // 并发注册同一邮箱：预检查通过但插入时撞唯一索引。
             // 靠数据库约束兜底，而不是靠应用层判断 —— 应用层判断存在并发窗口。
-            log.warn("并发注册撞唯一索引 | email={}", email);
+            log.warn("并发注册撞唯一索引 | email={}", maskEmail(email));
             throw new BusinessException(ErrorCode.EMAIL_ALREADY_EXISTS);
         }
 
@@ -106,6 +106,18 @@ public class UserServiceImpl implements UserService {
 
         // 注册即自动登录
         return issueTokens(user);
+    }
+
+    /**
+     * 日志用邮箱脱敏（2026-09-29 第五轮审计 #4）：日志里不留明文邮箱（PII），
+     * 保留首字符与域名，排查问题时仍能区分是哪个账号。
+     */
+    private static String maskEmail(String email) {
+        int at = email.indexOf('@');
+        if (at <= 0) {
+            return "***";
+        }
+        return email.charAt(0) + "***" + email.substring(at);
     }
 
     // ==================== 登录 ====================
@@ -121,7 +133,7 @@ public class UserServiceImpl implements UserService {
         //    否则攻击者可据此枚举出哪些邮箱已注册。
         if (user == null || !passwordEncoder.matches(request.getPassword(), user.getPassword())) {
             loginAttemptService.recordFailure(clientIp, email);
-            log.warn("登录失败 | email={} | ip={}", email, clientIp);
+            log.warn("登录失败 | email={} | ip={}", maskEmail(email), clientIp);
             throw new BusinessException(ErrorCode.BAD_CREDENTIALS);
         }
 

@@ -54,6 +54,24 @@ public class LoginAttemptService {
     /** 纯 IP 维度窗口（分钟） */
     private static final int IP_WINDOW_MINUTES = 10;
 
+    /**
+     * 纯邮箱维度的失败上限（跨 IP 累计）—— 第五轮审计 #1 补。
+     *
+     * <p>为什么还需要它：IP 维度的两个桶全部以"客户端 IP"为键，而 IP 来自
+     * {@code getRemoteAddr()}；一旦部署拓扑被绕过（如后端可被私网直连、伪造
+     * X-Forwarded-For），攻击者可以为每次请求"造"一个新 IP，把 IP 桶与
+     * IP+邮箱桶都重置掉，只剩"定向爆破某账号"这一条路仍然打得通。
+     *
+     * <p>为什么不干脆用"5 次 / 15 分钟"锁邮箱：那会打开"恶意锁死他人账号"的
+     * 拒绝服务面（知道某人邮箱就能锁他）。因此这里取<b>宽松上限 + 长窗口</b>：
+     * 15 次 / 60 分钟 —— 正常用户极少在一个小时内输错 15 次密码，
+     * 而跨 IP 的定向爆破会被稳稳限速。
+     */
+    private static final int MAX_EMAIL_ATTEMPTS = 15;
+
+    /** 纯邮箱维度窗口（分钟）：比 IP 桶长，因为它是跨 IP 追同一账号的唯一兜底 */
+    private static final int EMAIL_WINDOW_MINUTES = 60;
+
     private final StringRedisTemplate stringRedisTemplate;
 
     /**
@@ -66,6 +84,10 @@ public class LoginAttemptService {
     @Value("${codelkup.rate-limit.login-ip-max:30}")
     private int maxIpAttempts = MAX_IP_ATTEMPTS;
 
+    /** 纯邮箱维度上限（可配，默认 {@link #MAX_EMAIL_ATTEMPTS}），注入方式同 {@link #maxIpAttempts} */
+    @Value("${codelkup.rate-limit.login-email-max:15}")
+    private int maxEmailAttempts = MAX_EMAIL_ATTEMPTS;
+
     /** 细粒度 key：锁定"某 IP 打某账号" */
     private String key(String ip, String email) {
         return RedisKeys.LOGIN_FAIL_COUNT + ip + ":" + email;
@@ -74,6 +96,15 @@ public class LoginAttemptService {
     /** 粗粒度 key：不绑定邮箱，专门用来发现"换邮箱分片" */
     private String ipKey(String ip) {
         return RedisKeys.LOGIN_FAIL_BY_IP + ip;
+    }
+
+    /**
+     * 邮箱维度 key：跨 IP 累计"针对同一账号的失败"。
+     * 归属段写法（前缀 + {@code email:}）与改密锁定的 {@code pwd:} 同型，
+     * 不新增 RedisKeys 常量；清限流桶的工具只清 {@code rate:*}，不会误删它。
+     */
+    private String emailKey(String email) {
+        return RedisKeys.LOGIN_FAIL_COUNT + "email:" + email;
     }
 
     /**
@@ -90,6 +121,13 @@ public class LoginAttemptService {
                     "该网络登录失败次数过多，请 " + IP_WINDOW_MINUTES + " 分钟后再试");
         }
 
+        // 再判"纯邮箱"（跨 IP）：防伪造 IP 重置前两层 —— 详见 MAX_EMAIL_ATTEMPTS 的注释
+        String emailCount = stringRedisTemplate.opsForValue().get(emailKey(email));
+        if (emailCount != null && Integer.parseInt(emailCount) >= maxEmailAttempts) {
+            throw new BusinessException(ErrorCode.TOO_MANY_REQUESTS,
+                    "该账号登录失败次数过多，请 " + EMAIL_WINDOW_MINUTES + " 分钟后再试");
+        }
+
         String count = stringRedisTemplate.opsForValue().get(key(ip, email));
         if (count != null && Integer.parseInt(count) >= MAX_ATTEMPTS) {
             throw new BusinessException(ErrorCode.LOGIN_ATTEMPT_EXCEEDED,
@@ -97,21 +135,26 @@ public class LoginAttemptService {
         }
     }
 
-    /** 登录失败时累加计数（两个维度都要记） */
+    /** 登录失败时累加计数（三个维度都要记：IP / 邮箱 / IP+邮箱） */
     public void recordFailure(String ip, String email) {
         increment(key(ip, email), LOCK_MINUTES);
         increment(ipKey(ip), IP_WINDOW_MINUTES);
+        increment(emailKey(email), EMAIL_WINDOW_MINUTES);
     }
 
     /**
      * 登录成功时清除计数。
      *
-     * <p>只清细粒度 key（"我这次成功了"），<b>不清</b>纯 IP 计数 —— 否则攻击者
-     * 只要手里有一个自己的正常账号，成功登录一次就能把 IP 维度的失败记录抹掉，
-     * 那一层防线等于白加。
+     * <p>清两个 key：细粒度（IP+邮箱，"我这次成功了"）与<b>纯邮箱</b>
+     * （账号本人自证，跨 IP 的失败痕迹可以清零，避免正常用户被累计数误锁）。
+     *
+     * <p><b>不清</b>纯 IP 计数 —— 否则攻击者只要手里有一个自己的正常账号，
+     * 成功登录一次就能把 IP 维度的失败记录抹掉，那一层防线等于白加。
+     * （纯邮箱桶没有这个问题：它按"被尝试的账号"记，攻击者拿自己的账号刷不到别人的桶。）
      */
     public void clearFailure(String ip, String email) {
         stringRedisTemplate.delete(key(ip, email));
+        stringRedisTemplate.delete(emailKey(email));
     }
 
     /* ==================== 改密失败锁定（M-1 修复：userId 维度） ==================== */

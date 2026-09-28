@@ -236,10 +236,12 @@ def main():
         st, _, _ = call(site + avatar_url)
         check("上传文件经 nginx 可读（数据卷挂载正确）", st == 200, "HTTP %s" % st)
 
-    # ---------- 7. API 文档（面试官会点）----------
-    st, b, _ = call(site + "/v3/api-docs")
-    check("OpenAPI 文档可达（/v3/api-docs）",
-          st == 200 and isinstance(b, dict) and b.get("openapi"), "HTTP %s" % st)
+    # ---------- 7. API 文档：公网必须**不可达**（第五轮审计 #2b）----------
+    # 匿名可读的接口清单 + 字段模型是攻击者的"地图"；生产（prod profile）已由
+    # springdoc.api-docs.enabled=false 关闭，这里断言它确实关着。
+    # （此前这项断言的是"可达"——上线前把它当演示加分项；审计后改口径。）
+    st, _, _ = call(site + "/v3/api-docs")
+    check("API 文档未暴露到公网（/v3/api-docs → 404）", st == 404, "HTTP %s" % st)
 
     # ---------- 指标端点：公网必须不可达（M3-10）----------
     # 指标里有业务量级、错误分布与 AI 调用成本，抓取只应发生在**容器网络内**

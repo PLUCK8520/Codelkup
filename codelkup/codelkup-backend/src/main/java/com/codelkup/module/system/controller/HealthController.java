@@ -50,11 +50,14 @@ public class HealthController {
         data.put("time", LocalDateTime.now().toString());
 
         // ---- MySQL ----
+        // ⚠️ 2026-09-29 第五轮审计 #2a：失败时只回 "DOWN"，不回异常类名 ——
+        // 此接口匿名可读，异常类名（如 RedisConnectionFailureException）会把
+        // 内部组件与故障类型暴露给探测者；运维排障看服务端日志，不靠探针。
         try {
             Integer one = jdbcTemplate.queryForObject("SELECT 1", Integer.class);
             data.put("mysql", one != null && one == 1 ? "UP" : "UNKNOWN");
         } catch (Exception e) {
-            data.put("mysql", "DOWN: " + e.getClass().getSimpleName());
+            data.put("mysql", "DOWN");
         }
 
         // ---- Redis ----
@@ -65,7 +68,7 @@ public class HealthController {
             redisTemplate.delete(key);
             data.put("redis", "ok".equals(v) ? "UP" : "UNKNOWN");
         } catch (Exception e) {
-            data.put("redis", "DOWN: " + e.getClass().getSimpleName());
+            data.put("redis", "DOWN");
         }
 
         return Result.success(data);

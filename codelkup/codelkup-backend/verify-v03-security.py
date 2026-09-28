@@ -219,8 +219,11 @@ def case_forged_xff_semantics() -> None:
     check("本机直连时 XFF 被采信（阀语义：可信代理的 XFF 才是真实客户端）",
           len(forged_keys) >= 1, f"伪造 IP 的键={forged_keys}")
 
+    # ⚠️ 第五轮审计 #1 起多了"纯邮箱维度"键（login_fail:email:{email}）：它**故意**
+    #    不含任何 IP（跨 IP 累计，是伪造 XFF 场景下的兜底防线），不是"记到了真实对端"。
     misattributed = [k for k in keys("codelkup:auth:login_fail*")
-                     if f":{email}" in k and forged not in k]
+                     if f":{email}" in k and forged not in k
+                     and not k.startswith("codelkup:auth:login_fail:email:")]
     check("该次失败只记在伪造 IP 维度（没有同时写进真实对端维度）",
           not misattributed, f"异常键={misattributed}")
 

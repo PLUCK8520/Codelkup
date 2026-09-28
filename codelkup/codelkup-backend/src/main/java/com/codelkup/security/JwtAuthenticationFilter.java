@@ -72,6 +72,16 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
                         // 封禁用户：立即失效，即使 token 仍在有效期内
                         if (user.getStatus() != null && user.getStatus() == 2) {
                             log.debug("已封禁用户尝试访问 | userId={}", userId);
+                        } else if (user.getStatus() != null && user.getStatus() == 1
+                                && isWriteRequest(request) && !isSelfServicePath(request)) {
+                            // 禁言（status=1）：只拦"写"不拦"读" —— 被禁言者仍可浏览、搜索、
+                            // 看自己的通知；只有发帖/评论/点赞/关注等写操作会被拒。
+                            // 第五轮审计 #6：此前 status=1 没有任何强制点（当时库中也没有
+                            // 禁言入口，属潜在缺口），这是最靠前的一层兜底。
+                            // 处理方式（不认证 → 下游按未登录拒绝）与封禁分支同一口径：
+                            // 本过滤器只负责身份解析，不做响应（见类注释）。
+                            log.debug("禁言用户尝试写操作，按未认证拒绝 | userId={} | {} {}",
+                                    userId, request.getMethod(), request.getRequestURI());
                         } else {
                             AuthPrincipal principal = new AuthPrincipal(
                                     user, null, userLoader.toAuthorities(user));
@@ -86,6 +96,22 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
         }
 
         filterChain.doFilter(request, response);
+    }
+
+    /** 写操作方法（禁言拦截只针对写；GET/HEAD/OPTIONS 等读取一律放行） */
+    private static boolean isWriteRequest(HttpServletRequest request) {
+        String method = request.getMethod();
+        return "POST".equals(method) || "PUT".equals(method)
+                || "PATCH".equals(method) || "DELETE".equals(method);
+    }
+
+    /**
+     * 禁言用户仍需保留的自助路径：登出与刷新令牌。
+     * 少了这两条，禁言用户连"主动登出"和"会话续期"都做不了。
+     */
+    private static boolean isSelfServicePath(HttpServletRequest request) {
+        String uri = request.getRequestURI();
+        return uri.endsWith("/auth/logout") || uri.endsWith("/auth/refresh");
     }
 
     /**
