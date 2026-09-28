@@ -13,21 +13,27 @@ import type { ApiResult, TokenResponse } from '@/types/api'
  * 三件事：统一 baseURL / 注入 token / 统一错误提示与 401 自动刷新。
  */
 
-const TOKEN_KEY = 'codelkup_access_token'
-const REFRESH_KEY = 'codelkup_refresh_token'
+const ACCESS_KEY = 'codelkup_access_token'
+/** 旧版 localStorage 键（access 与 refresh 曾存这里）—— 升级 #3 后不再写入，只负责清理 */
+const LEGACY_LOCAL_KEYS = ['codelkup_access_token', 'codelkup_refresh_token']
 
 /* ==================== token 存取 ==================== */
 
+/**
+ * accessToken 存 sessionStorage（每标签页独立、关标签页即失效）；
+ * refreshToken **不再落任何本地存储** —— 第五轮审计 #3：它改由后端下发
+ * HttpOnly Cookie 承载（Path=/api/auth），JS 永远读不到，XSS 也偷不走。
+ * 续期完全走 Cookie（见 doRefresh），前端只负责带着 accessToken 发请求。
+ */
 export const tokenStorage = {
-  getAccess: () => localStorage.getItem(TOKEN_KEY),
-  getRefresh: () => localStorage.getItem(REFRESH_KEY),
-  set(access: string, refresh: string) {
-    localStorage.setItem(TOKEN_KEY, access)
-    localStorage.setItem(REFRESH_KEY, refresh)
+  getAccess: () => sessionStorage.getItem(ACCESS_KEY),
+  setAccess(access: string) {
+    sessionStorage.setItem(ACCESS_KEY, access)
   },
   clear() {
-    localStorage.removeItem(TOKEN_KEY)
-    localStorage.removeItem(REFRESH_KEY)
+    sessionStorage.removeItem(ACCESS_KEY)
+    // 顺手清掉旧版遗留（升级前 access/refresh 都写在 localStorage 里）
+    LEGACY_LOCAL_KEYS.forEach((k) => localStorage.removeItem(k))
   },
 }
 
@@ -90,20 +96,19 @@ function isAuthExpired(body: unknown): boolean {
 }
 
 async function doRefresh(): Promise<string> {
-  const refreshToken = tokenStorage.getRefresh()
-  if (!refreshToken) {
-    throw new Error('NO_REFRESH_TOKEN')
-  }
-  // 用裸 axios，绕开拦截器，避免刷新失败时再次触发刷新（死循环）
+  // 第五轮审计 #3：refresh 走 HttpOnly Cookie —— 这里**不再带 body**，
+  // 后端从 Cookie 取（同源请求浏览器自动携带；Cookie 的 Path=/api/auth 已限定）。
+  // 用裸 axios，绕开拦截器，避免刷新失败时再次触发刷新（死循环）。
   const { data } = await axios.post<ApiResult<TokenResponse>>(
     '/api/auth/refresh',
-    { refreshToken },
+    {},
     { headers: { 'Content-Type': 'application/json' } },
   )
   if (data.code !== 0 || !data.data?.accessToken) {
     throw new Error('REFRESH_FAILED')
   }
-  tokenStorage.set(data.data.accessToken, data.data.refreshToken)
+  // 只存 access；新的 refresh 由后端续写回 Cookie（响应里的 refreshToken 不再落盘）
+  tokenStorage.setAccess(data.data.accessToken)
   return data.data.accessToken
 }
 
@@ -117,12 +122,13 @@ function forceLogout() {
 /**
  * 凭证失效的收尾。
  *
- * ⚠️ 只有"本来登录着"（本地还存着 refreshToken）才跳登录页：
+ * ⚠️ 只有"本来登录着"（本地还存着 accessToken）才跳登录页：
  * 游客访问公开接口时也可能拿不到凭证，若一律重定向，
  * 未登录用户打开首页就会被弹到 /login。
+ * （#3 后"是否登录过"的判据从 refresh 换成 access —— refresh 已不落本地。）
  */
 function onAuthExpired() {
-  const wasLoggedIn = !!tokenStorage.getRefresh()
+  const wasLoggedIn = !!tokenStorage.getAccess()
   tokenStorage.clear()
   if (wasLoggedIn) {
     forceLogout()
@@ -130,14 +136,14 @@ function onAuthExpired() {
 }
 
 /**
- * 用 refreshToken 换新 accessToken 并**重放**原请求。
+ * 用 HttpOnly Cookie 里的 refreshToken 换新 accessToken 并**重放**原请求。
  *
- * @returns 重放成功的响应；无法刷新（无 refreshToken / 刷新失败 / 已重试过）返回 null
+ * @returns 重放成功的响应；无法刷新（本地无 access=未登录过 / 刷新失败 / 已重试过）返回 null
  */
 async function refreshAndReplay(
   config: InternalAxiosRequestConfig & { _retried?: boolean },
 ): Promise<AxiosResponse | null> {
-  if (config._retried || !tokenStorage.getRefresh()) {
+  if (config._retried || !tokenStorage.getAccess()) {
     return null
   }
   config._retried = true

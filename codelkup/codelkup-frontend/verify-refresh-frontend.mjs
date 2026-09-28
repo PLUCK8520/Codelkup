@@ -49,6 +49,11 @@ function check(name, ok, detail = '') {
   }
 }
 
+/** refresh 请求实际收到的 body：用例 1 断言它不含 refreshToken（第五轮审计 #3 后走 Cookie） */
+let lastRefreshBody = ''
+/** 模拟"Cookie 里的 refresh 也失效"（用例 4）—— Node 沙箱没有真实 Cookie 罐 */
+globalThis.__REFRESH_FAIL__ = false
+
 /* ============ mock 后端 ============ */
 const backend = createHttpServer((req, res) => {
   const send = (body) => {
@@ -62,8 +67,10 @@ const backend = createHttpServer((req, res) => {
     let raw = ''
     req.on('data', (c) => (raw += c))
     req.on('end', () => {
-      const rt = raw ? JSON.parse(raw).refreshToken : null
-      if (rt === 'BAD_REFRESH') {
+      // 第五轮审计 #3：refresh 走 HttpOnly Cookie，前端不再带 body ——
+      // 这里记录实际收到的 body 供用例 1 断言；"Cookie 是否有效"由开关模拟。
+      lastRefreshBody = raw
+      if (globalThis.__REFRESH_FAIL__) {
         send({ code: 40102, message: '登录凭证无效', data: null })
       } else {
         send({ code: 0, message: 'success', data: { accessToken: NEW_ACCESS, refreshToken: NEW_REFRESH } })
@@ -117,13 +124,21 @@ writeFileSync(
     `export default axios\n`,
 )
 
-/* ============ 浏览器全局的最小桩（request.ts 只用到 localStorage / location） ============ */
+/* ============ 浏览器全局的最小桩（request.ts 用到 localStorage（清旧键）/ sessionStorage / location） ============ */
 const kv = new Map()
 globalThis.localStorage = {
   getItem: (k) => (kv.has(k) ? kv.get(k) : null),
   setItem: (k, v) => kv.set(k, String(v)),
   removeItem: (k) => kv.delete(k),
   clear: () => kv.clear(),
+}
+// 第五轮审计 #3：accessToken 改存 sessionStorage（refresh 不落本地，在 HttpOnly Cookie 里）
+const skv = new Map()
+globalThis.sessionStorage = {
+  getItem: (k) => (skv.has(k) ? skv.get(k) : null),
+  setItem: (k, v) => skv.set(k, String(v)),
+  removeItem: (k) => skv.delete(k),
+  clear: () => skv.clear(),
 }
 const redirects = []
 globalThis.location = { pathname: '/posts/1', replace: (u) => redirects.push(u) }
@@ -138,41 +153,41 @@ const vite = await createViteServer({
 const mod = await vite.ssrLoadModule('/src/utils/request.ts')
 mod.default.defaults.baseURL = `http://127.0.0.1:${PORT}/api`
 
-/* ============ 用例 1：accessToken 过期 + refreshToken 有效 → 自动刷新并重放 ============ */
-kv.set('codelkup_access_token', 'EXPIRED_ACCESS')
-kv.set('codelkup_refresh_token', 'VALID_REFRESH')
+/* ============ 用例 1：accessToken 过期 + HttpOnly Cookie 有效 → 自动刷新并重放 ============ */
+skv.set('codelkup_access_token', 'EXPIRED_ACCESS')
 const me = await mod.get('/users/me')
 check('刷新后重放原请求成功（拿到本人资料）', me && me.id === 1, JSON.stringify(me))
-check('本地 accessToken 已被替换为新 token', kv.get('codelkup_access_token') === NEW_ACCESS)
-check('本地 refreshToken 已轮换', kv.get('codelkup_refresh_token') === NEW_REFRESH)
+check('sessionStorage 的 accessToken 已被替换为新 token', skv.get('codelkup_access_token') === NEW_ACCESS)
+check('刷新请求不带 refreshToken（走 HttpOnly Cookie）',
+  !('refreshToken' in JSON.parse(lastRefreshBody || '{}')), 'body=' + lastRefreshBody)
 check('refresh 恰好被调用 1 次', refreshCalls === 1, '实际 ' + refreshCalls)
 check('已登录场景未发生重定向', redirects.length === 0, redirects.join(','))
 
 /* ============ 用例 2：并发两个请求同时失效 → 只刷新一次（单槽位不被互相顶掉）============ */
-kv.set('codelkup_access_token', 'EXPIRED_ACCESS')
-kv.set('codelkup_refresh_token', 'VALID_REFRESH')
+skv.set('codelkup_access_token', 'EXPIRED_ACCESS')
 const before = refreshCalls
 const [r1, r2] = await Promise.all([mod.get('/users/me'), mod.get('/users/me')])
 check('并发失效：两个请求都成功', r1?.id === 1 && r2?.id === 1)
 check('并发失效：refresh 只调用 1 次（串行化生效）', refreshCalls - before === 1, '实际 ' + (refreshCalls - before))
 
-/* ============ 用例 3：游客（无 refreshToken）→ 抛 40101 且**不**跳登录页 ============ */
+/* ============ 用例 3：游客（本地无 access = 从未登录）→ 抛 40101、不刷新、不跳登录页 ============ */
 kv.clear()
-kv.set('codelkup_access_token', 'EXPIRED_ACCESS')
+skv.clear()
 const beforeRedirects = redirects.length
+const beforeRefresh = refreshCalls
 let err3 = null
 try {
   await mod.get('/users/me')
 } catch (e) {
   err3 = e
 }
-check('游客无 refreshToken → 抛出业务码 40101', err3 && err3.code === 40101, err3 && err3.code)
+check('游客（无 access）→ 抛出业务码 40101', err3 && err3.code === 40101, err3 && err3.code)
 check('游客不被重定向到登录页（避免首页被弹走）', redirects.length === beforeRedirects)
-check('游客路径未打 refresh 接口', refreshCalls === before + 1, '实际 ' + refreshCalls)
+check('游客路径不触发 refresh（本地无 access 即不尝试刷 Cookie）', refreshCalls === beforeRefresh, '实际 ' + refreshCalls)
 
-/* ============ 用例 4：refreshToken 也失效 → 抛 40102 + 清空凭证 + 跳登录页 ============ */
-kv.set('codelkup_access_token', 'EXPIRED_ACCESS')
-kv.set('codelkup_refresh_token', 'BAD_REFRESH')
+/* ============ 用例 4：Cookie 里的 refresh 也失效 → 抛原请求 40101 + 清凭证 + 跳登录页 ============ */
+skv.set('codelkup_access_token', 'EXPIRED_ACCESS')
+globalThis.__REFRESH_FAIL__ = true
 let err4 = null
 try {
   await mod.get('/users/me')
@@ -182,15 +197,17 @@ try {
 // 刷新失败时向上抛的是**原请求**的业务码（40101），而不是 refresh 接口的 40102 ——
 // 这是刻意的：调用方只需要知道"这次请求没通过、会话已失效"，
 // 不该拿到一个它从没调用过的接口的错误码。
-check('refreshToken 失效 → 抛原请求的 40101（刷新失败已转为重新登录）', err4 && err4.code === 40101, err4 && err4.code)
-check('refreshToken 失效 → 本地凭证被清空', !kv.get('codelkup_access_token') && !kv.get('codelkup_refresh_token'))
+check('refresh 失效 → 抛原请求的 40101（刷新失败已转为重新登录）', err4 && err4.code === 40101, err4 && err4.code)
+check('refresh 失效 → 本地凭证被清空', !skv.get('codelkup_access_token'))
 check('登录态失效 → 跳转登录页并带回跳地址',
   redirects.length > beforeRedirects && redirects[redirects.length - 1].includes('/login?redirect='),
   redirects[redirects.length - 1])
 
 /* ============ 用例 5：silent 请求失败不弹全局提示（草稿自动保存的失败降级）============ */
+globalThis.__REFRESH_FAIL__ = false // 复位，不影响后续用例
 globalThis.__elMsgs = []
 kv.clear() // 游客态即可：本组用例只看提示弹没弹
+skv.clear()
 
 // 对照组：同一个"业务码失败"的接口，非 silent 请求**必须**弹 —— 证明探针真的有效
 let err5 = null

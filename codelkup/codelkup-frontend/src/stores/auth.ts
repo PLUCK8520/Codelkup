@@ -8,7 +8,8 @@ import type { CurrentUserVO, LoginRequest, RegisterRequest, UserVO } from '@/typ
  * 认证状态。
  *
  * ⚠️ 关键设计：**不在前端解码 JWT 判断登录态**。
- *    token 存在 localStorage，但"是否已登录"以"能否成功调用 /users/me"为准 ——
+ *    accessToken 存 sessionStorage（refresh 在 HttpOnly Cookie 里，第五轮审计 #3），
+ *    但"是否已登录"以"能否成功调用 /users/me"为准 ——
  *    token 可能已过期、被登出拉黑、或被封禁，只有服务端说了算。
  *    启动时调用 fetchCurrentUser() 做一次真实校验。
  */
@@ -23,7 +24,7 @@ export const useAuthStore = defineStore('auth', () => {
   /** 登录 */
   async function login(payload: LoginRequest) {
     const res = await authApi.login(payload)
-    tokenStorage.set(res.accessToken, res.refreshToken)
+    tokenStorage.setAccess(res.accessToken)
     user.value = await userApi.getMe()
     return res
   }
@@ -31,7 +32,7 @@ export const useAuthStore = defineStore('auth', () => {
   /** 注册（后端注册即返回 token，等于自动登录） */
   async function register(payload: RegisterRequest) {
     const res = await authApi.register(payload)
-    tokenStorage.set(res.accessToken, res.refreshToken)
+    tokenStorage.setAccess(res.accessToken)
     user.value = await userApi.getMe()
     return res
   }

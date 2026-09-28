@@ -707,3 +707,11 @@ flowchart TD
    - **#8 依赖扫描（low）**：`npm audit --omit=dev` = **0 漏洞**；后端依赖清单人工判读无已知高危（未跑 CVE 库扫描，如实记录）。
    - **回归（全部在修复后的代码上）**：单测 **101/101**（含新增"纯邮箱跨 IP 拦截"用例）；金路径 **44/44**；v03-security **18/18**（首轮 17/18 —— 它的"伪造 XFF 只产生预期键"白名单断言把新增的 `login_fail:email:` 键误判为异常键，**随修复同步断言**后复跑全绿）；sprint1 **44/44**。
    - **归档教训**：① **新增 Redis 键维度会撞上"键空间白名单式"验收断言**（安全套件用 `KEYS login_fail*` 扫异常键）—— 改键结构前先 grep 验收脚本里的键扫描。② 断言"数量 / 集合"的测试（单测 `times(2)`、`Map.of(2 项)`）在加维度时必须同步（本轮 2 处单测 + 1 处脚本断言都是这个模式）。
+60. **审计未修项 #3 专项：refresh 转 HttpOnly Cookie（用户"执行吧"，2026-09-29 凌晨）**：
+   - **方案（双轨）**：后端在登录 / 注册 / 刷新成功时下发 `Set-Cookie: codelkup_refresh=...`（HttpOnly + SameSite=Lax + Path=/api/auth + Secure（生产）+ Max-Age 7 天）；刷新 / 登出接口 **body 优先、Cookie 兜底**；前端 access 转 **sessionStorage**、refresh **不再落任何本地存储**、续期改由裸 axios 走 Cookie（不带 body）。
+   - **为什么不做"彻底不返回 body"**：验收脚本 38 处直接引用 `refreshToken`，全量改写回归风险大于收益；**而安全收益不减** —— 攻击者要拿"登录瞬间的响应体"必须先注入脚本，那一刻他同样能读走表单密码；真正的增量是"**日常长会话**里 XSS 后门拿不到 refresh"（HttpOnly，JS 永远读不到），双轨下完全成立。该论述写进了 AuthController 的注释。
+   - **实测（六项全过）**：Set-Cookie 属性（HttpOnly / SameSite=Lax / Path=/api/auth）✓；Cookie-only 刷新（body 为空）成功 ✓；Cookie 轮换（新值 ≠ 旧值，续写回浏览器）✓；轮换链第二次可继续 ✓；body 版兼容路径仍工作 ✓；logout 清 Cookie（Max-Age=0）✓。
+   - **浏览器实测（browser agent 四步全过）**：登录成功 → F5 刷新仍登录 → 设置页数据可读 → 登出回游客态；佐证：sessionStorage 有 access、localStorage 无 refreshToken、`document.cookie` 为空（HttpOnly 生效）。
+   - **回归**：金路径 44/44、v03-security 18/18、v03-password 25/25（refresh 轮换 / 消费）、sprint1 44/44（body 兼容全程）；前端 9 套 **266/266**（`verify-refresh-frontend.mjs` 随重构同步：桩补 sessionStorage、mock 改"Cookie 语义"、新增"刷新请求不带 refreshToken"断言，18/18）。
+   - **已知行为（如实记录）**：access 在 sessionStorage → **新开标签页显示未登录**（sessionStorage 按标签隔离），需在该标签重新登录（未来可把 access 也迁到 Cookie / 内存 + 启动静默续期，另议）。
+   - **归档教训**：① "改 token 存哪"会牵动**前端契约的沙箱桩**（Node 无 sessionStorage）与**脚本断言语义**，改前先 grep 契约。② **双轨设计的取舍要写进代码注释 + 记账**，否则下一轮审计会把它当"没修干净"再报一次。

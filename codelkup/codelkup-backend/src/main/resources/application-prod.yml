@@ -26,6 +26,9 @@ springdoc:
 codelkup:
   jwt:
     secret: ${JWT_SECRET}         # 必填
+  security:
+    # refresh 走 HttpOnly Cookie 后，生产（https）必须带 Secure（第五轮审计 #3）
+    cookie-secure: true
 
 logging:
   level:

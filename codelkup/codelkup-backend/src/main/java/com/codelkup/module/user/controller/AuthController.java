@@ -12,15 +12,19 @@ import com.codelkup.security.RateLimitService;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import jakarta.servlet.http.HttpServletRequest;
+import jakarta.servlet.http.HttpServletResponse;
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.Email;
 import jakarta.validation.constraints.NotBlank;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.http.HttpHeaders;
+import org.springframework.http.ResponseCookie;
 import org.springframework.validation.annotation.Validated;
 import org.springframework.web.bind.annotation.*;
 
+import java.time.Duration;
 import java.util.Map;
 
 /**
@@ -61,10 +65,67 @@ public class AuthController {
     @Value("${codelkup.rate-limit.refresh-per-hour:120}")
     private int refreshPerHour = 120;
 
+    /**
+     * Cookie 的 Secure 标志（2026-09-29 第五轮审计 #3）。
+     * 生产（https）置 true；本地 dev 走 http，置 true 会让浏览器直接不存 Cookie。
+     */
+    @Value("${codelkup.security.cookie-secure:false}")
+    private boolean cookieSecure;
+
+    /**
+     * refresh token 的 HttpOnly Cookie（第五轮审计 #3：refresh 不再依赖 localStorage）。
+     *
+     * <p>为什么是<b>双轨</b>而不是"彻底不返回 body"：
+     * <ul>
+     *   <li>响应体**仍返回** refreshToken、刷新/登出接口**仍接受** body 里的值 ——
+     *       验收脚本里有 38 处直接引用它，全量改写脚本的回归风险远大于收益；</li>
+     *   <li>而安全收益并不打折：攻击者要拿到"登录瞬间的响应体"必须先能注入脚本，
+     *       那一刻他同样能读走表单里的密码 —— 真正的增量收益是"**日常长会话**里
+     *       XSS 后门拿不到 refresh"（它在 HttpOnly Cookie 里，JS 永远读不到），
+     *       这个收益在双轨下**完全成立**。</li>
+     * </ul>
+     *
+     * <p>属性口径：HttpOnly（JS 不可读）、SameSite=Lax（挡跨站 POST，防 CSRF 触发刷新）、
+     * Path=/api/auth（只随认证接口发送，其余请求不携带）、Secure 生产开启。
+     * Max-Age 取 7 天：与 refresh 白名单 TTL 对齐；不同步只会导致"多登一次"，
+     * 不会把会话置于危险状态。
+     */
+    private static final String REFRESH_COOKIE = "codelkup_refresh";
+    private static final String REFRESH_COOKIE_PATH = "/api/auth";
+    private static final Duration REFRESH_COOKIE_MAX_AGE = Duration.ofDays(7);
+
+    /** 下发 / 续期 refresh Cookie（登录、注册、刷新成功时调用） */
+    private void writeRefreshCookie(HttpServletResponse response, String refreshToken) {
+        if (refreshToken == null || refreshToken.isBlank()) {
+            return;
+        }
+        response.addHeader(HttpHeaders.SET_COOKIE, ResponseCookie.from(REFRESH_COOKIE, refreshToken)
+                .httpOnly(true)
+                .secure(cookieSecure)
+                .path(REFRESH_COOKIE_PATH)
+                .sameSite("Lax")
+                .maxAge(REFRESH_COOKIE_MAX_AGE)
+                .build()
+                .toString());
+    }
+
+    /** 清除 refresh Cookie（登出时调用；Max-Age=0 让浏览器立即丢弃） */
+    private void clearRefreshCookie(HttpServletResponse response) {
+        response.addHeader(HttpHeaders.SET_COOKIE, ResponseCookie.from(REFRESH_COOKIE, "")
+                .httpOnly(true)
+                .secure(cookieSecure)
+                .path(REFRESH_COOKIE_PATH)
+                .sameSite("Lax")
+                .maxAge(0)
+                .build()
+                .toString());
+    }
+
     @Operation(summary = "注册", description = "注册成功后直接返回双 token，免去二次登录；按 IP 限流")
     @PostMapping("/register")
     public Result<TokenResponse> register(@Valid @RequestBody RegisterRequest request,
-                                          HttpServletRequest httpRequest) {
+                                          HttpServletRequest httpRequest,
+                                          HttpServletResponse response) {
         // 注册开关（PRE-MORTEM T0-2）：放在限流**之前** —— "开关"是全局运营意图，
         // 关闭时应当对所有请求给出一致的 40304，而不是先烧注册额度、
         // 让访客在 42901 与 40304 之间看到两种失败（也让"关不关"与限流状态解耦）。
@@ -78,13 +139,17 @@ public class AuthController {
         if (!rateLimitService.tryAcquire("register", httpRequest.getRemoteAddr(), registerPerHour, 60)) {
             throw new BusinessException(ErrorCode.TOO_MANY_REQUESTS, "注册过于频繁，请 1 小时后再试");
         }
-        return Result.success(userService.register(request));
+        TokenResponse tokens = userService.register(request);
+        // 双轨（见 REFRESH_COOKIE 注释）：body 照旧返回，同时落一枚 HttpOnly Cookie
+        writeRefreshCookie(response, tokens.getRefreshToken());
+        return Result.success(tokens);
     }
 
     @Operation(summary = "登录", description = "邮箱 + 密码登录，返回 accessToken / refreshToken")
     @PostMapping("/login")
     public Result<TokenResponse> login(@Valid @RequestBody LoginRequest request,
-                                       HttpServletRequest httpRequest) {
+                                       HttpServletRequest httpRequest,
+                                       HttpServletResponse response) {
         // ⚠️ 这个 IP 必须是**不可伪造**的：登录失败锁定按「IP + 邮箱」判重。
         //    可信边界交给容器配置（application.yml: server.forward-headers-strategy=native
         //    + remoteip.internal-proxies）—— 只有直连对端是可信代理时才采信
@@ -94,30 +159,45 @@ public class AuthController {
         //    历史坑：此前这里手写解析 XFF 并取**第一段**，客户端自带
         //    `X-Forwarded-For: 1.2.3.4` 即可让每次尝试落在不同计数键上，
         //    5 次锁定永不触发 —— 防爆破形同不存在。
-        return Result.success(userService.login(request, httpRequest.getRemoteAddr()));
+        TokenResponse tokens = userService.login(request, httpRequest.getRemoteAddr());
+        writeRefreshCookie(response, tokens.getRefreshToken());
+        return Result.success(tokens);
     }
 
-    @Operation(summary = "刷新凭证", description = "用 refreshToken 换一对新 token；按 IP 限流（默认 120 次/小时）")
+    @Operation(summary = "刷新凭证", description = "用 refreshToken 换一对新 token；按 IP 限流（默认 120 次/小时）。"
+            + "入参双轨（第五轮审计 #3）：body 里的 refreshToken 优先，没有则读 HttpOnly Cookie（新前端走这条）")
     @PostMapping("/refresh")
-    public Result<TokenResponse> refresh(@RequestBody Map<String, String> body,
-                                         HttpServletRequest httpRequest) {
+    public Result<TokenResponse> refresh(@RequestBody(required = false) Map<String, String> body,
+                                         @CookieValue(value = REFRESH_COOKIE, required = false) String cookieRefresh,
+                                         HttpServletRequest httpRequest,
+                                         HttpServletResponse response) {
         // L-4 补齐：这是未认证接口，每次调用都要做 JWT 解析 + Redis 读写 ——
         // 无限流时可用脚本放大后端成本；按 IP 限额，额度远高于正常设备（30 分钟一换 ≈ 2 次/小时）
         if (!rateLimitService.tryAcquire("refresh", httpRequest.getRemoteAddr(), refreshPerHour, 60)) {
             throw new BusinessException(ErrorCode.TOO_MANY_REQUESTS, "刷新过于频繁，请稍后再试");
         }
+        // 双轨取值：body 优先（旧前端与验收脚本），否则 Cookie（新前端，JS 读不到 refresh）
         String refreshToken = body == null ? null : body.get("refreshToken");
+        if (refreshToken == null || refreshToken.isBlank()) {
+            refreshToken = cookieRefresh;
+        }
         if (refreshToken == null || refreshToken.isBlank()) {
             return Result.error(ErrorCode.PARAM_MISSING, "refreshToken 不能为空");
         }
-        return Result.success(userService.refresh(refreshToken));
+        TokenResponse tokens = userService.refresh(refreshToken);
+        // 轮换后的新 refresh 必须续写回 Cookie（否则 Cookie 里一直是已消费的旧值，下次刷新即失败）
+        writeRefreshCookie(response, tokens.getRefreshToken());
+        return Result.success(tokens);
     }
 
-    @Operation(summary = "登出", description = "accessToken 拉黑 + refreshToken 白名单移除")
+    @Operation(summary = "登出", description = "accessToken 拉黑 + refreshToken 白名单移除 + 清除 HttpOnly Cookie")
     @PostMapping("/logout")
     public Result<Void> logout(@RequestHeader(value = "Authorization", required = false) String authorization,
-                               @CurrentUser Long userId) {
+                               @CurrentUser Long userId,
+                               HttpServletResponse response) {
         userService.logout(extractBearer(authorization), userId);
+        // 双轨收尾：前端已清本地存储，这里清服务端 Cookie
+        clearRefreshCookie(response);
         return Result.success();
     }
 
