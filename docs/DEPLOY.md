@@ -73,7 +73,7 @@ chmod +x deploy/deploy.sh
 `deploy.sh` 会在动手前拦掉三类问题：Docker 没装/没启动、`.env` 还是模板占位值、`JWT_SECRET` 不足 32 字节。启动后会轮询健康检查，超时自动打印后端日志尾部。
 
 > ⚠️ **首次部署有一条顺序，别漏**（真机复验实测踩到）：`seed-demo` 要**新建 6 个演示账号**，而"注册关闭"会把它们全部拒掉（40304）。
-> ① `.env` 先 `REGISTRATION_ENABLED=true`（模板默认 false 是有意的，首次记得先开着）→ ② `./deploy/deploy.sh --seed --verify`（开态自检 27/27）→ ③ 灌完改回 `REGISTRATION_ENABLED=false` + `docker compose restart backend`（已有账号登录不受影响）→ ④ 复跑 `verify-deploy.py` 复核（关态自检 28/28）。
+> ① `.env` 先 `REGISTRATION_ENABLED=true`（模板默认 false 是有意的，首次记得先开着）→ ② `./deploy/deploy.sh --seed --verify`（开态自检 28/28）→ ③ 灌完改回 `REGISTRATION_ENABLED=false` + **`docker compose up -d backend`**（⚠️ 不能只 `restart`：它不重新注入环境变量，开关不会生效 —— 本地复验实测）→ ④ 复跑 `verify-deploy.py` 复核（关态自检 29/29）。
 > 另一条硬前提：`RATE_LIMIT_REGISTER_PER_HOUR` **≥ 演示账号数 6**（模板已默认给 10）—— 注册限流按 IP 计，用默认值 5 会让第 6 个账号撞 42901、seed 中断。seed 报错信息里已内置这两条处置提示。
 
 ```bash
@@ -148,7 +148,7 @@ docker compose exec -e MYSQL_PWD="$MYSQL_ROOT_PASSWORD" mysql mysql -uroot codel
 ```bash
 docker compose ps                       # 四个容器都该是 healthy
 docker compose logs -f backend          # 后端日志（prod profile 不打印 SQL）
-docker compose restart backend          # 重启后端（改 .env 后需要）
+docker compose up -d backend            # 改 .env 后必须用 up -d（restart 不重新注入环境变量）
 docker compose up -d --build            # 拉新代码后重建
 docker compose down                     # 停止（数据保留在 volume，不会丢）
 
@@ -256,7 +256,7 @@ nginx 侧已在 `nginx.conf` 里单独为该路径配了四件套：
 | 在哪跑 | 跑什么 | 覆盖 |
 |---|---|---|
 | **本地开发栈**（本机 MySQL/Redis + 开发 jar） | `verify-sprint*.py` / `verify-v03-*.py` / `verify-v04-*.py` / `mvn verify` / 前端 9 套契约 | **功能对不对**：几百条断言，依赖"1 万帖 + 具体计数"这类数据前提 |
-| **compose 栈**（部署后） | `deploy/verify-deploy.py`（关态 28 项 / 开态 27 项）+ `seed-demo.py` | **这台机器上通不通**：站点级、数据无关（静态资源 / 反代 / 鉴权语义 / 上传卷 / AI 降级 / SSE 首帧 / 站点统计 / 指标不暴露 / 注册开关是否真的进了容器） |
+| **compose 栈**（部署后） | `deploy/verify-deploy.py`（关态 29 项 / 开态 28 项）+ `seed-demo.py` | **这台机器上通不通**：站点级、数据无关（静态资源 / 反代 / 鉴权语义 / 上传卷 / AI 降级 / SSE 首帧 / 站点统计 / 指标不暴露 / 注册开关是否真的进了容器） |
 
 ⚠️ 改过 `nginx.conf` / `Dockerfile` / 后端代码后，必须 `docker compose up -d --build` **再**跑自检 ——
 否则容器里还是旧镜像，验的是上一个版本（本轮就踩到过：容器里的 nginx 缺 SSE 段）。

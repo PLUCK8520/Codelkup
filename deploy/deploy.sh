@@ -102,6 +102,6 @@ cat <<EOF
   2. 想在浏览器里直接打开：http://<你的服务器公网IP>:${PORT}/
   3. 主要运维命令：
        docker compose logs -f backend      # 看后端日志
-       docker compose restart backend      # 重启后端
+       docker compose up -d backend        # 改 .env 后必须用 up -d（restart 不重新注入环境变量）
        docker compose down                 # 停止（数据保留在 volume 中）
 EOF

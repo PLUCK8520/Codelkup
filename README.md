@@ -47,7 +47,7 @@ docker compose up -d --build
 ```bash
 cp deploy/.env.production.example .env   # 填强随机密钥（deploy.sh 会拒绝占位值）
 # ⚠️ 首次部署：先把 .env 的 REGISTRATION_ENABLED 改为 true（seed 要建 6 个演示账号，
-#    注册关闭会全部 40304）；灌完再改回 false + docker compose restart backend
+#    注册关闭会全部 40304）；灌完再改回 false + docker compose up -d backend（restart 不重新注入环境变量）
 ./deploy/deploy.sh --seed --verify       # 构建启动 → 灌演示数据 → 上线自检
 ```
 

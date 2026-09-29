@@ -36,7 +36,7 @@
 - [ ] （方案 B）域名解析 → Caddyfile → reload → `https` 可达
 
 ## P0 · 部署与自检
-- [ ] **首次部署顺序（真机复验实测，别漏）**：① `.env` 先 `REGISTRATION_ENABLED=true` → ② `./deploy/deploy.sh --seed --verify`（开态 27/27）→ ③ 改回 `false` + `docker compose restart backend` → ④ 复跑 `verify-deploy.py`（关态 **28/28**）
+- [ ] **首次部署顺序（真机复验实测，别漏）**：① `.env` 先 `REGISTRATION_ENABLED=true` → ② `./deploy/deploy.sh --seed --verify`（开态 28/28）→ ③ 改回 `false` + **`docker compose up -d backend`**（⚠️ **不能用 `restart`** —— 它只重启容器、不重新注入环境变量，注册开关不会生效；本地复验实测 `restart` 后 `registrationEnabled` 仍为 `true`）→ ④ 复跑 `verify-deploy.py`（关态 **29/29**）
 - [ ] `docker compose ps`：mysql / redis / backend / frontend 全部 healthy
 - [ ] 管理员临时提权（DEPLOY §5，改完**重新登录**才生效）→ 试管理功能 → 降权
 
