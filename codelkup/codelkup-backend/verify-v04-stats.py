@@ -32,7 +32,8 @@ import urllib.error
 import urllib.request
 
 BASE = "http://127.0.0.1:8085"
-MYSQL = r"D:\MySQL\MySQL Server 8.0\bin\mysql.exe"
+# MySQL 客户端不在 PATH 里：换机器时用环境变量 MYSQL_CLIENT 覆盖即可
+MYSQL = os.environ.get("MYSQL_CLIENT", r"D:\MySQL\MySQL Server 8.0\bin\mysql.exe")
 # dev 库口令**不入库**（本机开发凭据）：优先 DEV_DB_PASSWORD 环境变量，其次读仓库根 .env 的 DB_PASSWORD。
 # 说明：验收脚本要直连本机 MySQL 做"接口值 ↔ 库真值"对账，口令不能写死在仓库里。
 def _dev_pw() -> str:

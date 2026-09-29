@@ -1799,7 +1799,7 @@ S0.2 ngram校验 ─┘
 ## ⏳ 待你确认
 
 1. **产品名**：`Codelkup` 是占位名，要改吗？
-2. **工程目录**：`C:\Users\32519\Desktop\Codelkup\codelkup\` 是否可以？（可放后端 + 前端两个子目录）
+2. **工程目录**：项目根下的 `codelkup/` 是否可以？（可放后端 + 前端两个子目录）
 3. **MySQL 凭据**：root 密码，或是否用 §8.5 动作 2 建独立账号
 4. **Redis**：是否用 §8.5 动作 1 的 Docker 命令直接起？
 5. **前端 UI 库**：Element Plus（推荐，生态最成熟）/ Naive UI / Ant Design Vue？

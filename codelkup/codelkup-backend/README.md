@@ -22,7 +22,7 @@ docker run -d --name codelkup-redis -p 6379:6379 \
 ```bash
 docker exec codelkup-redis redis-cli ping        # 期望 PONG
 
-"D:/MySQL/MySQL Server 8.0/bin/mysql.exe" -u codelkup -p -e "SELECT 1" codelkup
+mysql -u codelkup -p -e "SELECT 1" codelkup        # 客户端不在 PATH 里就写全路径
 ```
 
 ## 二、启动应用

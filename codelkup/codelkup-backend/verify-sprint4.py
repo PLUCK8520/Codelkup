@@ -24,9 +24,11 @@ import urllib.request
 from urllib.parse import quote
 
 BASE = "http://127.0.0.1:8085"
-JAR_DIR = r"C:\Users\32519\Desktop\Codelkup\codelkup\codelkup-backend"
+# 项目根 = 脚本自身所在目录（本文件就在 codelkup-backend/ 下）—— 不写死本机绝对路径
+JAR_DIR = os.path.dirname(os.path.abspath(__file__))
 JAR = os.path.join(JAR_DIR, "target", "codelkup-backend-0.0.1-SNAPSHOT.jar")
-MYSQL = r"D:\MySQL\MySQL Server 8.0\bin\mysql.exe"
+# MySQL 客户端不在 PATH 里：换机器时用环境变量 MYSQL_CLIENT 覆盖即可
+MYSQL = os.environ.get("MYSQL_CLIENT", r"D:\MySQL\MySQL Server 8.0\bin\mysql.exe")
 DB = "codelkup"
 # dev 库口令**不入库**（本机开发凭据）：优先 DEV_DB_PASSWORD 环境变量，其次读仓库根 .env 的 DB_PASSWORD。
 # 说明：验收脚本要直连本机 MySQL 做"接口值 ↔ 库真值"对账，口令不能写死在仓库里。

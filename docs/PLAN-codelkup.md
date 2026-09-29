@@ -2,7 +2,7 @@
 
 > 版本：v1.0
 > 日期：2026-09-24
-> 配套：`PRD-codelkup.md`、`TECH-DESIGN-codelkup.md`、`PRIORITY-codelkup.md`（原文档位于 `C:\Users\32519\WorkBuddy\2026-09-24-20-01-31\docs\`）
+> 配套：`PRD-codelkup.md`、`TECH-DESIGN-codelkup.md`、`PRIORITY-codelkup.md`（原文档未随仓库分发，仅本地归档）
 > 本文件性质：**可执行排期 + 环境适配后的技术栈修订**
 
 ---
@@ -393,7 +393,7 @@ S0.2 ngram校验 ─┘                    │              │
 ### 需要你确认
 - [ ] MySQL root 密码（或是否建独立账号）
 - [ ] Redis 用 Docker 起，还是你有别的安排
-- [ ] 工程目录：`C:\Users\32519\Desktop\Codelkup\codelkup\` 是否可以
+- [ ] 工程目录：项目根下的 `codelkup/` 是否可以
 - [ ] 是否认可 §5 的"4 周后即投递"策略
 
 ### 原文档遗留、本计划书已代决

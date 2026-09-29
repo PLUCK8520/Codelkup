@@ -16,7 +16,9 @@ import urllib.error
 import urllib.request
 
 BASE = "http://127.0.0.1:8085"
-JAR = r"C:\Users\32519\Desktop\Codelkup\codelkup\codelkup-backend\target\codelkup-backend-0.0.1-SNAPSHOT.jar"
+# 项目根 = 脚本自身所在目录（本文件就在 codelkup-backend/ 下）—— 不写死本机绝对路径
+JAR = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                   "target", "codelkup-backend-0.0.1-SNAPSHOT.jar")
 
 # 绕开系统代理：系统代理会劫持 localhost 请求返回 502
 _opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))

@@ -5,8 +5,8 @@
  * 用 vite 的 ssrLoadModule 加载**真实源码** `src/utils/markdown.ts`，
  * 在 jsdom 环境里跑全套用例 —— 不重写消毒逻辑，避免「测的是我以为的实现」。
  *
- * 运行（需要出口代理，见 README）：
- *   HTTPS_PROXY=http://127.0.0.1:61888 HTTP_PROXY=http://127.0.0.1:61888 \
+ * 运行（若本机需要经代理上网，把下面两处换成你自己的代理地址）：
+ *   HTTPS_PROXY=http://127.0.0.1:<端口> HTTP_PROXY=http://127.0.0.1:<端口> \
  *     node verify-sprint2-frontend.mjs
  *
  * 退出码：0 = 全通过，1 = 有失败用例（可直接接进 CI）。

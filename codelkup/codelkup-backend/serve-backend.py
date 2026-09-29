@@ -11,7 +11,9 @@ java 就不会被判定为孤儿进程。父 shell 退出后 Python 进程本身
 """
 import subprocess, os, sys, time, urllib.request
 
-BACKEND = r"C:/Users/32519/Desktop/Codelkup/codelkup/codelkup-backend"
+# 本脚本就放在 codelkup-backend/ 下 —— 项目根用**脚本自身位置**推算，不写死本机绝对路径：
+# 写死的话别人 clone 下来直接跑不了（还得先改代码），也会把本机用户名带进版本库。
+BACKEND = os.path.dirname(os.path.abspath(__file__))
 LOG = os.path.join(BACKEND, "backend-run.log")
 
 env = dict(os.environ)

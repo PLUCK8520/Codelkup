@@ -21,7 +21,8 @@ import urllib.request
 from urllib.parse import quote
 
 BASE = "http://127.0.0.1:8085"
-JAR_DIR = r"C:\Users\32519\Desktop\Codelkup\codelkup\codelkup-backend"
+# 项目根 = 脚本自身所在目录（本文件就在 codelkup-backend/ 下）—— 不写死本机绝对路径
+JAR_DIR = os.path.dirname(os.path.abspath(__file__))
 JAR = os.path.join(JAR_DIR, "target", "codelkup-backend-0.0.1-SNAPSHOT.jar")
 
 _opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
