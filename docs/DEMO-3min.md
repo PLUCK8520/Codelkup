@@ -7,7 +7,7 @@
 ## 演示前的 30 秒检查（不占正式 3 分钟）
 
 ```bash
-python deploy/verify-deploy.py --site http://localhost:8090   # 22 项全绿再开始
+python deploy/verify-deploy.py --site http://localhost:8090   # 27 项全绿再开始（注册关态下 28 项）
 ```
 
 - 若站点**没配 AI key**：AI 环节会显示"AI 暂未启用（未配置模型密钥）"——**这也是要演示的一部分**（见 0:45 的话术），不用临时配 key。

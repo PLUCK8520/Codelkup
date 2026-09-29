@@ -715,3 +715,26 @@ flowchart TD
    - **回归**：金路径 44/44、v03-security 18/18、v03-password 25/25（refresh 轮换 / 消费）、sprint1 44/44（body 兼容全程）；前端 9 套 **266/266**（`verify-refresh-frontend.mjs` 随重构同步：桩补 sessionStorage、mock 改"Cookie 语义"、新增"刷新请求不带 refreshToken"断言，18/18）。
    - **已知行为（如实记录）**：access 在 sessionStorage → **新开标签页显示未登录**（sessionStorage 按标签隔离），需在该标签重新登录（未来可把 access 也迁到 Cookie / 内存 + 启动静默续期，另议）。
    - **归档教训**：① "改 token 存哪"会牵动**前端契约的沙箱桩**（Node 无 sessionStorage）与**脚本断言语义**，改前先 grep 契约。② **双轨设计的取舍要写进代码注释 + 记账**，否则下一轮审计会把它当"没修干净"再报一次。
+61. **纠错 + 性能优化 + 全文件体检/清理轮（2026-09-29 凌晨；用户："今天晚上主要任务是纠错，优化性能，部署明天再说，我要确保没有bug才会部署" → 追加"帮我排查所有文件bug，还有整理文件，清理垃圾"）**：
+   - **后端纠错（6 项，全部有验收）**：
+     1. **计数回滚漂移**：Redis 增量在事务内 +1、回滚不回补（MySQL 基线走 AFTER_COMMIT 被正确跳过 → 两侧永久漂移，等重建脚本才发现）。修：`CounterService` 内登记 `afterCompletion` 回滚反向补偿（提交零动作；`applyXxxDelta` 返回"是否真动过 Redis"——失败降级时不对未执行成功的增量做补偿），**8 个调用点零改动**。
+     2. **评论点赞不校验帖子状态**（`UserActionService.likeComment`）：帖子被删后页面 404 但接口仍可直调 —— 给已删内容的评论点赞照样计数 / 加声望 / 发通知。修：`requirePublishedPost(comment.getPostId())`；unlike 有意不加（取消无副作用，且必须允许把历史点赞减回去）。
+     3. **提问帖改普通帖残留采纳位**：详情仍显示"已采纳"，且改回提问可再采纳一次（来回切换 = 重复结算 +15 的刷分路径）。修：新增 `CommentService.revokeAcceptance`（条件更新清采纳位 + 复位评论标记 + 收回声望），`PostServiceImpl.update` 在 question→normal 时调用。
+     4. **重复采纳重发通知**：幂等路径每次点击都补发"回答被采纳"。修：只在"历史不一致（帖子指向它、评论未标 accepted）"时补写+补发；标记本就正确时纯无操作（与点赞幂等路径同一口径）。
+     5. **删帖残留 t_post_tag**：逻辑删帖后关联行还在（标签页 EXISTS 与"按关联重算标签使用数"的维护脚本会把已删帖算进去）。修：`postTagMapper.deleteByPostId(id)`。
+     6. **标题 trim 前校验**：`"   abc   "` 以 9 字符通过 min=4，落库却是 3 字符。修：DTO setter 内先 trim（校验注解看到的就是真正入库的值）。
+   - **前端纠错（5 项）**：登录回跳路径 `/post/` → `/posts/`（此前必落 404）；`CommentItem` 的 likeCount / liked 补 `watch(props)`（父组件重拉列表后不再停留在旧值）；**7 个列表页+个人主页加请求序号**（首页/问答/标签/收藏/关注/关注者/搜索：先发出的旧响应不再覆盖新数据；搜索的"清空关键词"路径同领号并收 loading）；个人主页分页进 URL（`?page=`；翻页只重拉列表、换用户才全刷）。
+   - **性能优化（先量后改，全部 EXPLAIN 实测）**：
+     - **V14 迁移（4 条索引）**：列表 COUNT 25.4→**3.25ms**（`idx_count_visible` 覆盖索引）、标题前缀 27.3→**0.046ms**（`idx_title_prefix` range scan）、提问统计 18→**3.37ms**（`idx_stats_question`）；关注流 `idx_author_time`：优化器**不选它**（10 作者 IN 列表选 idx_status_time 全扫 22.6ms）→ `PostMapper.selectFeedPage` 加 `FORCE INDEX` 后 **2.8ms**、单作者反扫 **0.13ms**（8~25 倍），"实测与为什么不能删"写进 javadoc。
+     - **HikariCP 池 20→40**（tomcat 线程 200 vs 池 20：DB 端点先排连接队再排队等 DB；本机 `max_connections=151` 富余）。
+     - 本轮早些：**Element Plus 按需注册实测无收益**（按需 chunk 999,700B ≈ 全量 1,000,640B，全站 160 处 el-* 已用绝大部分组件）**已回滚**；字体删 Inter 4 个 woff2（≈95KB）；首屏不再等 `/users/me`（省 1 RTT）。实测结论写进 `main.ts` 注释，防下一轮重新调研。
+   - **全文件体检与清理（两路只读审计 + 逐条复核）**：
+     - **部署阻断级**：根 `.env.example` 缺 `REDIS_PASSWORD`（compose 用 `${REDIS_PASSWORD:?}` 强制校验 → 照模板部署必失败）→ 补上（含生成命令与"为什么必填"）；`login-email-max`（第五轮 #1 新增）此前只以 `@Value` 默认值存在 → application.yml 登记 `${RATE_LIMIT_LOGIN_EMAIL_MAX:15}` + compose 白名单透传（**20=20 对齐**）+ `.env.production.example` 注释口径更新。
+     - **口径修正**：nginx 的 `/v3`、`/swagger-ui` 两条 location 注释仍写"有意公开/加分项"→ 改为"透传后端 404，**不能删**（删了会落 SPA 回退返回 200，verify-deploy 的 404 断言当场失败）"——审计代理建议"删除"，**经复核证伪**；`DEMO-3min.md` 的 verify-deploy "22 项"→"27（关态 28）"。
+     - **死代码**：RedisKeys 4 个零引用常量（帖子详情缓存 / HTML 缓存 / Feed 收件箱 / 热度 ZSet，V0.2 遗留）、前端 `truncate()` / `markdownToPlainText()` 两个零引用导出 → 删除（均先 grep 全仓 + 构建验证）；⚠️ tokens.css 的 8 个"未使用令牌"经查是 **design-system MASTER.md 正式登记的调色板条目 → 保留**（删除会让设计系统文档对不上）。
+     - **垃圾清理（85 个文件 + 2 个 `__pycache__` 目录）**：历史验收日志（含 26MB 的 verify-s3.log）、约 60 个 regress*.log、前端 regress-*.mjs.log、`.mod-check.tmp` / `.proxy-ctx.txt` / `.vite-meta.json`（仅 .gitignore 提及的临时产物）。⛔ 有意保留并说明：`backups/*.sql.gz`（备份）、`uploads/**`（dev 运行数据）、`.workbuddy/`（设计评审截图与 WCAG 脚本，TASKS 有引用）、`codelkup/tools/`（沙箱工具）。
+     - **只读部署校验**：`docker compose config --quiet` **exit 0**（未启动/重建任何容器，遵守"不部署"口径）。
+   - **回归（总数 = 分项之和，全部跑在最终代码上）**：后端 **747** = 自起型 9 套 **535**（44/92/79/105/87/35/25/8/60）+ 附着型 10 套 **212**（collections 23 / experience 27 / metrics 22 / password 25 / questions 21 / reputation 17 / score 9 / security 18 / stats 23 / upload 27）；单测 **101/101**（`mvn verify` BUILD SUCCESS）；前端 9 套 **266**；金路径 **44/44**；`npm run build`（vue-tsc）✓；**浏览器实测 6 步全过**（首页 / 问答 / 搜索 Java 148 条 / 登录 / 个人主页分页进 URL / 评论点赞 0→1→0），应用自身控制台 error **0**。
+   - **编排事故与处置（如实记录）**：① 首轮自起型未清限流桶 → sprint2/sprint4 **假失败**（42901）→ 改"每套前 `clear-rate-buckets.py`"重跑全绿；② score / metrics 在**日常调度**后端上失败：metrics 抓指标时热度计时器尚未诞生（时间线：后端 01:59:51 启动、热度首跑 02:00:23、脚本 02:00:13–42 落在 initial-delay 窗口内），score 断言本就需要秒级重算 → 按脚本 docstring 的"专用参数后端起"复跑（score 9/9、metrics 22/22、upload 27/27）；③ 浏览器实测抓到**环境级问题**：久跑的 vite dev server 的 `.vite-cache` 预打包残缺（缺 marked / dompurify / 表单样式）→ 懒加载路由整页白屏（生产 build 不受影响），按 vite.config 自带处置（重启 + `--force` 重建）修复后复测全过。
+   - **归档教训**：① **"加索引"≠"用索引"** —— 优化器会误估（本查询 8~25 倍差距），必要时用 hint 且把"实测数字 + 为什么不能删"写进代码；② **审计代理的建议必须复核**（本轮 nginx"删除建议"经复核会打破既有验收断言，反被证伪）；③ **清理"未使用"资源前先查它是否被文档登记**（设计令牌 ∈ MASTER.md）；④ **限流桶与"专用参数后端"是回归编排的硬约束**（备注 55 教训的再次验证，两次都表现为"看起来是功能坏了"）；⑤ **dev 缓存残缺会伪装成代码 bug** —— 处置三步：看 Network 里的 `/.vite-cache/deps` 失败 → 确认生产 build 正常 → 重启 + `--force`。
+   - **状态**：改动已落盘、全量回归与浏览器实测全绿；提交与部署按用户次日安排（无 remote，沿用既有口径）。
