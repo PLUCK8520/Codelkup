@@ -39,9 +39,15 @@ __pycache__/
 .mod-check.tmp
 
 # ---------- 沙箱环境适配工具（非项目交付物）----------
-# forward-proxy.py / fetch-npm-meta.py 是"让 npm/vite 在本机沙箱代理下联网"的 hack，
-# 依赖环境特有的出口代理（127.0.0.1:61191 + 令牌注入），与项目功能无关。
-codelkup/tools/
+# forward-proxy.py / fetch-npm-meta.py 是"让 npm/vite 在本机沙箱出口代理下联网"的 hack，
+# 依赖该环境特有的代理端口与令牌注入，与项目功能无关，不进版本库。
+# ⚠️ 这里必须写 `codelkup/tools/*` 而不是 `codelkup/tools/`：
+#    一旦忽略整个目录，Git 就**不会进入该目录**，目录内文件的 `!` 例外规则会失效。
+#    而 gen-ep-style-deps.py 是**项目交付物**（vite.config.ts 里 optimizeDeps.include
+#    那 118 条 element-plus 样式入口就是它生成的，element-plus 升级后要重跑），
+#    必须显式放行，否则别人 clone 下来无法重新生成。
+codelkup/tools/*
+!codelkup/tools/gen-ep-style-deps.py
 
 # ---------- 编辑器 / IDE ----------
 .idea/

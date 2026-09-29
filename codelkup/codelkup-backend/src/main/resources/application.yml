@@ -68,6 +68,15 @@ spring:
       # 未设口令 —— 默认空值让两种环境都能连，生产由 .env 强制提供。
       password: ${REDIS_PASSWORD:}
       timeout: 3000ms
+      # ⚠️ 2026-09-29 更正：下面这段连接池配置**当前完全不生效**。
+      # Spring Boot 只在 classpath 存在 commons-pool2 时才启用 Lettuce 池化，
+      # 而本项目 pom 并没有引入它（已用 mvn dependency:tree 实测确认）。
+      # 也就是说真正在跑的是 Lettuce 的**单条共享连接 + 多路复用**——
+      # 对本项目这种"命令小、并发不高"的场景完全够用，不需要池化。
+      # 保留这段是为了将来真要池化时有个起点，但别把它当成"已经配了池"：
+      # 改这里的数字不会有任何效果，除非先加 commons-pool2 依赖。
+      # （顺带修正一个曾经的误解：并不存在"Redis 池 16 < tomcat 200 → 高并发等连接"的风险，
+      #   因为池根本没启用；真正需要盯的是下面 Hikari 的 40。）
       lettuce:
         pool:
           max-active: 16

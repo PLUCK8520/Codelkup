@@ -6,7 +6,7 @@
  * **所见即所得的真实安全效果** —— 预览里被过滤掉的危险标签，
  * 发表后同样会被过滤，不会出现"预览正常、发布后变样"的落差。
  */
-import { computed, ref } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useImagePaste } from '@/composables/useImagePaste'
 import MarkdownViewer from './MarkdownViewer.vue'
 
@@ -30,6 +30,50 @@ const props = withDefaults(defineProps<{ placeholder?: string; minRows?: number 
 
 /** 移动端不并排显示预览，用 tab 切换 */
 const mobileTab = ref<'edit' | 'preview'>('edit')
+
+/* ==================== 预览的渲染成本控制（2026-09-29）====================
+   把 `model` 直接绑给 MarkdownViewer 时，**每一次 input 都是一次全文重活**：
+   `marked.parse` 全量解析 + `DOMPurify` 全量消毒 + `enhanceCodeBlocks` 重建整块代码 DOM。
+   正文上限 5 万字，长文写作时每次按键 O(n)，中文输入法组词期间更是连打多次 ——
+   手感是能直接被感知的（预览晚 200ms 没人介意，打字卡顿人人介意）。 */
+
+/** 预览防抖间隔：足够短到"边写边看"，又足够长到把连续按键合成一次渲染 */
+const PREVIEW_DEBOUNCE_MS = 200
+
+/** 真正交给预览渲染的内容（防抖后的正文） */
+const previewContent = ref(model.value)
+let previewTimer: ReturnType<typeof setTimeout> | undefined
+watch(model, (v) => {
+  clearTimeout(previewTimer)
+  previewTimer = setTimeout(() => {
+    previewContent.value = v
+  }, PREVIEW_DEBOUNCE_MS)
+})
+
+/* 窄屏下编辑与预览是两个 tab，**隐藏的那个不渲染**。
+   CSS 的 display:none 不会阻止 Vue 渲染子组件 —— 手机上停在"编辑"tab 时，
+   看不见的预览仍在付全文渲染与代码块 DOM 重建的成本。 */
+const NARROW_QUERY = '(max-width: 768px)'
+const isNarrow = ref(false)
+let narrowMql: MediaQueryList | null = null
+
+function onNarrowChange(e: MediaQueryListEvent) {
+  isNarrow.value = e.matches
+}
+
+onMounted(() => {
+  narrowMql = window.matchMedia(NARROW_QUERY)
+  isNarrow.value = narrowMql.matches
+  narrowMql.addEventListener('change', onNarrowChange)
+})
+
+onBeforeUnmount(() => {
+  clearTimeout(previewTimer)
+  narrowMql?.removeEventListener('change', onNarrowChange)
+})
+
+/** 预览是否需要真的渲染：宽屏左右分栏同时可见，窄屏只在预览 tab */
+const showPreview = computed(() => !isNarrow.value || mobileTab.value === 'preview')
 
 const charCount = computed(() => model.value.length)
 
@@ -185,7 +229,8 @@ const TOOLBAR = [
 
       <div class="md-preview" :class="{ 'mobile-hidden': mobileTab !== 'preview' }">
         <div v-if="!model" class="preview-empty">预览区 —— 开始输入后实时渲染</div>
-        <MarkdownViewer v-else :content="model" />
+        <!-- v-else-if 而不是 v-else：窄屏切到"编辑"tab 时真的卸载预览，别在背后白算 -->
+        <MarkdownViewer v-else-if="showPreview" :content="previewContent" />
       </div>
     </div>
   </div>

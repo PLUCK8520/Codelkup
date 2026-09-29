@@ -22,11 +22,11 @@ import { computed, ref, watch } from 'vue'
 import { useRoute, useRouter, type LocationQueryRaw } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import { postApi } from '@/api/post'
-import { statsApi } from '@/api/stats'
 import { feedApi } from '@/api/social'
 import { userApi } from '@/api/user'
 import { useAuthStore } from '@/stores/auth'
 import { useMetaStore } from '@/stores/meta'
+import { useStatsStore } from '@/stores/stats'
 import PostCard from '@/components/PostCard.vue'
 import PostListSkeleton from '@/components/PostListSkeleton.vue'
 import EmptyState from '@/components/EmptyState.vue'
@@ -55,8 +55,13 @@ const topAuthors = ref<RankingUserVO[]>([])
  * 聚合接口给的是**当前全量、同一时刻**的三个数。
  * 拿不到（null）时：待解决整项不显示、板块 / 标签退回字典长度（即旧行为），
  * 任何情况下都不显示 0 —— 与全站"失败态不显示 0"同一口径。
+ *
+ * 2026-09-29：改读共享 store（页脚 / 问答页 / 标签页同一份）。
+ * 此前本页与页脚会对同一个 URL 各发一次请求 —— 同样的数据、同样的 3 条 COUNT，
+ * 只是因为它同时出现在布局层与页面层。store 内做了在途去重 + 30s TTL。
  */
-const siteStats = ref<SiteStatsVO | null>(null)
+const statsStore = useStatsStore()
+const siteStats = computed(() => statsStore.data)
 
 /** 侧栏板块预览条数：更多走 `/boards` */
 const SIDEBAR_BOARD_LIMIT = 6
@@ -329,12 +334,9 @@ userApi
     topAuthors.value = rows
   })
   .catch(() => {})
-statsApi
-  .overview()
-  .then((s) => {
-    siteStats.value = s
-  })
-  .catch(() => {})
+// 站点计数：走共享 store（在途去重 + 30s TTL），与页脚同一份数据 ——
+// 这里不再单独发请求，因此即使它慢或失败也不会影响 Hero 的其它数字
+statsStore.ensure()
 </script>
 
 <template>

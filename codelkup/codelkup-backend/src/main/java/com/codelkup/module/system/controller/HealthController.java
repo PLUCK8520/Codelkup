@@ -11,6 +11,7 @@ import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 
+import java.time.Duration;
 import java.time.LocalDateTime;
 import java.util.LinkedHashMap;
 import java.util.Map;
@@ -63,7 +64,11 @@ public class HealthController {
         // ---- Redis ----
         try {
             String key = "codelkup:health:probe";
-            redisTemplate.opsForValue().set(key, "ok");
+            // ⚠️ 必须带 TTL（2026-09-29 补）：正常路径下面会 delete，
+            // 但只要 get / delete 之间抛异常，一个**没有 TTL 的 key 就会永久留在 Redis**。
+            // 而本接口匿名可达（SecurityConfig 里 permitAll），不能留下这种残留面。
+            // 5 秒足够完成一次读写往返，异常时也会被自动回收。
+            redisTemplate.opsForValue().set(key, "ok", Duration.ofSeconds(5));
             Object v = redisTemplate.opsForValue().get(key);
             redisTemplate.delete(key);
             data.put("redis", "ok".equals(v) ? "UP" : "UNKNOWN");

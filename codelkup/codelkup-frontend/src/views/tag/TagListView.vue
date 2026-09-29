@@ -9,7 +9,7 @@
  */
 import { computed, onMounted, ref } from 'vue'
 import { tagApi } from '@/api/post'
-import { statsApi } from '@/api/stats'
+import { useStatsStore } from '@/stores/stats'
 import type { TagVO } from '@/types/api'
 
 const TAG_LIMIT = 50
@@ -25,8 +25,13 @@ const error = ref('')
  * "引用最多的 N 个标签"（诚实但含糊）。拿到总数后可以像搜索页那样直说
  * "共 X 个标签"，被上限截断时再明说"列出前 N 个"。
  * 拿不到（null）时退回旧文案：它是锦上添花，不该让整页失败。
+ *
+ * 2026-09-29：改读共享 store（页脚 / 首页 / 问答页同一份，在途去重 + 30s TTL）——
+ * 此前本页与页脚会对同一个 URL 各发一次请求。用 computed 顺带修掉一个时序问题：
+ * 直接赋值的话，"进页面时 stats 还没回来"就永远停在降级文案，等它回来也不再更新。
  */
-const tagTotal = ref<number | null>(null)
+const statsStore = useStatsStore()
+const tagTotal = computed(() => statsStore.data?.tagCount ?? null)
 
 /**
  * 计数行文案。
@@ -60,14 +65,9 @@ async function load() {
     loading.value = false
   }
 
-  // 总数单独拉：它是文案的锦上添花（拿不到就退回"引用最多的 N 个"），
-  // 不能因为一个辅助数字失败而让整个标签列表进错误态
-  statsApi
-    .overview()
-    .then((s) => {
-      tagTotal.value = s.tagCount
-    })
-    .catch(() => {})
+  // 总数走共享 store：与页脚共用同一份（在途去重 + 30s TTL）。
+  // 它依旧是"锦上添花"——失败只影响文案精度，不影响标签列表本身
+  statsStore.ensure()
 }
 
 onMounted(load)

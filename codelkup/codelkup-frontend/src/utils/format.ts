@@ -46,3 +46,14 @@ export function formatCount(n?: number | null): string {
   const v = num / 1_000_000
   return (v >= 10 ? Math.round(v) : v.toFixed(1).replace(/\.0$/, '')) + 'm'
 }
+
+/**
+ * 精确千分位：10545 → 10,545（页脚站点数据用）
+ *
+ * 为什么不复用 formatCount：页脚要的是"真东西"的质感 ——
+ * 缩写数字（10.5k）在列表里省空间，摆在页脚却像讨巧的装饰；
+ * 精确值才像后台真实读数（与站点统计接口返回的原始计数一一对应，可核对）。
+ */
+export function formatExact(n?: number | null): string {
+  return (n ?? 0).toLocaleString('en-US')
+}

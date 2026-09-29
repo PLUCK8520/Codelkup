@@ -14,12 +14,12 @@ import { computed, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import { postApi } from '@/api/post'
-import { statsApi } from '@/api/stats'
 import { useAuthStore } from '@/stores/auth'
+import { useStatsStore } from '@/stores/stats'
 import PostCard from '@/components/PostCard.vue'
 import PostListSkeleton from '@/components/PostListSkeleton.vue'
 import EmptyState from '@/components/EmptyState.vue'
-import type { PostListVO, PostQueryRequest, SiteStatsVO } from '@/types/api'
+import type { PostListVO, PostQueryRequest } from '@/types/api'
 
 type TabValue = 'unsolved' | 'latest' | 'solved'
 
@@ -52,8 +52,15 @@ const error = ref('')
  *    它只是待解决数），同一行会渲染出「共 3 个提问 · 待解决 3 · 已解决 10」
  *    这种自相矛盾的数字。聚合接口口径恒定，三个数永远满足 N = A + B。
  * ⚠️ 失败时为 null：计数行整行不显示数字（见 statsText），而不是把"没拿到"说成 0。
+ *
+ * 2026-09-29：改读共享 store（页脚 / 首页 / 标签页同一份，在途去重 + 30s TTL）。
+ * 此前它被塞进 load() 的 `Promise.all` —— 两个问题：
+ *   ① 统计与 tab / 页码**毫无关系**，却每翻一页、每切一次 tab 都重拉一遍
+ *      （服务端这个接口是 3 条 COUNT 且刻意不缓存）；
+ *   ② 与列表捆在一起，统计接口抖一下就把整页拖进错误态、列表被清空。
  */
-const stats = ref<SiteStatsVO | null>(null)
+const statsStore = useStatsStore()
+const stats = computed(() => statsStore.data)
 
 /**
  * 计数行文案。
@@ -83,18 +90,17 @@ async function load() {
   const seq = ++loadSeq
   loading.value = true
   error.value = ''
+  // 站点计数：**不 await**（2026-09-29 修复）。
+  // 它与本页列表无关（口径恒定、不随 tab / 页码变化），曾经被塞进 Promise.all，
+  // 结果是"统计接口抖一下 → 整页进错误态 + 列表被清空"。
+  // store 内做在途去重 + 30s TTL，所以放在这里也不会造成翻页重复请求。
+  statsStore.ensure()
   try {
-    // 列表 + 全站计数（服务端聚合）：计数不再是"本页 total 的分身"，
-    // 也不再需要两个 size=1 的探针请求 —— 3 个请求收敛成 2 个。
-    const [list, siteStats] = await Promise.all([
-      postApi.list(buildQuery(tab.value, page.value)),
-      statsApi.overview(),
-    ])
+    const list = await postApi.list(buildQuery(tab.value, page.value))
     if (seq !== loadSeq) return
     posts.value = list.records
     total.value = list.total
     pages.value = list.pages
-    stats.value = siteStats
   } catch (e) {
     if (seq !== loadSeq) return
     error.value = e instanceof Error ? e.message : '加载失败'

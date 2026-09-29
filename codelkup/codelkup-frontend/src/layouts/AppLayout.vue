@@ -5,13 +5,15 @@
  * 结构：Header（sticky）→ 主内容 → Footer
  * 响应式：≤1100px 收起一级导航改走汉堡面板（含搜索框折行，详见 style 中的断点）
  */
-import { onBeforeUnmount, ref, watch } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter, type RouteLocationRaw } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import type { InputInstance } from 'element-plus'
 import { useAuthStore } from '@/stores/auth'
 import { useNotificationStore } from '@/stores/notification'
+import { useStatsStore } from '@/stores/stats'
 import { notificationApi } from '@/api/notification'
+import { formatExact } from '@/utils/format'
 import { useNotificationStream } from '@/composables/useNotificationStream'
 import UserAvatar from '@/components/UserAvatar.vue'
 import LevelBadge from '@/components/LevelBadge.vue'
@@ -176,6 +178,78 @@ function onAskAi() {
   }
   askOpen.value = true
 }
+
+/**
+ * 页脚导航（V0.5 四栏改版）。
+ *
+ * ★ 只放**真实存在**的路由。页脚是最容易堆死链的地方 ——
+ * "关于我们 / 隐私政策 / 联系方式 / 友情链接"这类凑数项一个都不放：
+ * 点进去 404 或空白，比页脚少几行更伤（这个站没有这些页面，就不装作有）。
+ */
+const FOOTER_BROWSE: { label: string; to: RouteLocationRaw }[] = [
+  { label: '首页', to: { name: 'home' } },
+  { label: '问答', to: { name: 'questions' } },
+  { label: '板块', to: { name: 'boards' } },
+  { label: '标签', to: { name: 'tags' } },
+  { label: '排行榜', to: { name: 'ranking' } },
+]
+
+/** 「参与」栏：都需要登录，守卫会带 redirect 去登录页、登录后回到原地 */
+const FOOTER_JOIN: { label: string; to: RouteLocationRaw }[] = [
+  { label: '关注流', to: { name: 'following' } },
+  { label: '我的收藏', to: { name: 'my-collections' } },
+  { label: '我的草稿', to: { name: 'my-drafts' } },
+  // 标签写"发布内容"而不是"发帖提问"：这条链接落在编辑器上，
+  // 发帖 / 提问是编辑器里的两种类型（提问走 ?type=1），标成"提问"会与落点不符
+  { label: '发布内容', to: { name: 'post-create' } },
+]
+
+/**
+ * 页脚「站点数据」：真实接口计数（`GET /stats`，游客可读）。
+ *
+ * 数据来自**共享 stats store**（在途去重 + 30s TTL），不是本组件自己发请求 ——
+ * 页脚在每个页面都渲染，首页 / 问答页 / 标签页也要同一份数，
+ * 各自发一次的话首页就是"同一 URL 两遍"、问答页还会变成"每翻页一遍"。
+ *
+ * 除此之外还有三条讲究：
+ *  1. `silent: true`（在 store 内）—— 拦截器对非 silent 请求会弹全局红条；
+ *     页脚是次要信息，统计接口挂掉时不该打断用户（整栏隐藏即可，见模板的 v-if）。
+ *  2. **等首屏空闲再触发**（requestIdleCallback）—— 不跟首屏的帖子列表抢连接。
+ *     慢网下页脚数字晚到几百毫秒没人介意，首屏晚到才会被介意。
+ *     Safari 没有 requestIdleCallback，退回 300ms 定时器。
+ *  3. 拿不到就**整栏不渲染**，不放 0 或 "—" —— 那种东西看起来像站坏了。
+ */
+const statsStore = useStatsStore()
+
+const FOOTER_STATS = computed(() => {
+  const s = statsStore.data
+  if (!s) return []
+  return [
+    { label: '帖子', value: s.boardPostCount, hint: '全部板块下的帖子总数' },
+    { label: '板块', value: s.boardCount, hint: '站点开设的讨论板块数' },
+    { label: '标签', value: s.tagCount, hint: '已被使用的标签数' },
+    { label: '提问', value: s.questionCount, hint: '类型为「提问」的帖子数' },
+    { label: '已解决', value: s.questionSolvedCount, hint: '已采纳答案的提问数' },
+  ]
+})
+
+onMounted(() => {
+  // store 的 ensure() 自带失败静默与去重，这里只管"什么时候触发"
+  const load = () => void statsStore.ensure()
+
+  // TS 的 lib.dom 未声明 requestIdleCallback，这里就地收窄类型
+  const idle = (
+    window as Window & {
+      requestIdleCallback?: (cb: () => void, opts?: { timeout: number }) => number
+    }
+  ).requestIdleCallback
+
+  if (typeof idle === 'function') {
+    idle(load, { timeout: 2000 })
+  } else {
+    window.setTimeout(load, 300)
+  }
+})
 </script>
 
 <template>
@@ -367,11 +441,64 @@ function onAskAi() {
     <!-- RAG 问答抽屉（M3-8）：挂在布局层，任意页面都能开 -->
     <AiAnswerPanel v-model="askOpen" />
 
-    <!-- ==================== 页脚 ==================== -->
+    <!-- ==================== 页脚 ====================
+         ★ V0.5 四栏改版：品牌定位 / 浏览 / 参与 / 站点数据 + 底栏。
+         只放三类"真东西"——能点进去的路由、真实接口计数、编译期事实（版本 / 技术栈），
+         一个凑数的死链都不放。 -->
     <footer class="app-footer">
-      <div class="container footer-inner">
-        <span class="footer-brand"><span class="sec-num">§</span> Codelkup · 开发者技术社区</span>
-        <span class="footer-meta">V0.1.0 · Spring Boot 3.5 · Vue 3 · MySQL ngram</span>
+      <div class="container">
+        <div class="footer-grid">
+          <!-- 第 1 栏：品牌 + 一句话讲清"这是什么、来了能干什么" -->
+          <div class="footer-col footer-about">
+            <router-link :to="{ name: 'home' }" class="footer-brand">
+              <img src="/brand-mark.svg?v=2" alt="" width="22" height="22" />
+              <span>Codelkup</span>
+            </router-link>
+            <p class="footer-tagline">
+              面向开发者与在校学生的技术社区：Markdown 发帖、中文全文检索、
+              采纳式问答与站内通知。把问题写清楚，这里有人接。
+            </p>
+          </div>
+
+          <!-- 第 2 栏：浏览 -->
+          <nav class="footer-col" aria-labelledby="footer-browse-title">
+            <h2 id="footer-browse-title" class="footer-col-title">浏览</h2>
+            <ul class="footer-links">
+              <li v-for="item in FOOTER_BROWSE" :key="item.label">
+                <router-link :to="item.to">{{ item.label }}</router-link>
+              </li>
+            </ul>
+          </nav>
+
+          <!-- 第 3 栏：参与（未登录点进去由守卫带去登录页并带回原地） -->
+          <nav class="footer-col" aria-labelledby="footer-join-title">
+            <h2 id="footer-join-title" class="footer-col-title">参与</h2>
+            <ul class="footer-links">
+              <li v-for="item in FOOTER_JOIN" :key="item.label">
+                <router-link :to="item.to">{{ item.label }}</router-link>
+              </li>
+            </ul>
+          </nav>
+
+          <!-- 第 4 栏：站点数据（真实接口计数；取不到就整栏不渲染） -->
+          <div v-if="FOOTER_STATS.length" class="footer-col">
+            <h2 class="footer-col-title">站点数据</h2>
+            <ul class="footer-stats">
+              <!-- title 写明每项口径：数字要能被核对，不能让人猜"已解决"算的是什么 -->
+              <li v-for="item in FOOTER_STATS" :key="item.label" :title="item.hint">
+                <span class="footer-stat-label">{{ item.label }}</span>
+                <span class="footer-stat-value">{{ formatExact(item.value) }}</span>
+              </li>
+            </ul>
+          </div>
+        </div>
+
+        <!-- 底栏：版权 + 编译期事实。技术栈不是装饰 ——
+             它写的是"这套东西真实跑在哪套技术之上"，与页面上的功能一一对得上。 -->
+        <div class="footer-bottom">
+          <span class="footer-copy">© 2026 Codelkup · 开发者技术社区</span>
+          <span class="footer-meta">V0.1.0 · Spring Boot 3.5 · Vue 3 · MySQL ngram</span>
+        </div>
       </div>
     </footer>
   </div>
@@ -668,25 +795,139 @@ function onAskAi() {
   padding: var(--space-6) 0 var(--space-12);
 }
 
-/* ---------- Footer ---------- */
+/* ---------- Footer（V0.5 四栏改版）----------
+   原来只有"品牌 + 技术栈"一行，信息量撑不起页脚 —— 用户扫到底部会以为站很空。
+   现在四栏：品牌定位（略宽，给 tagline 换行空间）/ 浏览 / 参与 / 站点数据。
+   ★ 断点与 header 同一套口径：1100 掉两栏、768 掉单栏。 */
 .app-footer {
   border-top: 1px solid var(--color-border-subtle);
-  padding: var(--space-6) 0;
+  padding: var(--space-10) 0 var(--space-6);
   margin-top: auto;
 }
 
-.footer-inner {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  gap: var(--space-4);
-  font-size: var(--text-sm);
-  color: var(--color-subtle-foreground);
-  flex-wrap: wrap;
+.footer-grid {
+  display: grid;
+  grid-template-columns: 1.7fr 1fr 1fr 1.25fr;
+  gap: var(--space-8) var(--space-6);
 }
 
-/* ★ v5：页脚放**真实工程信号**（版本 + 技术栈 + 全文检索方案），等宽小字。
-   灵感来自 V2EX：把版本号、在线人数这类"真东西"直接摆上页面 ——
+.footer-col {
+  min-width: 0;
+}
+
+/* 品牌：与顶栏同一枚鹰标 + 同一套等宽字 —— 页脚也要让人认出"这是同一个站" */
+.footer-brand {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  font-family: var(--font-mono);
+  font-size: var(--text-md);
+  font-weight: 600;
+  letter-spacing: var(--tracking-heading);
+  color: var(--color-foreground);
+  text-decoration: none;
+  transition: color var(--transition-fast) var(--ease-out);
+}
+
+.footer-brand:hover {
+  color: var(--color-accent);
+}
+
+.footer-brand img {
+  display: block;
+  border-radius: var(--radius-full);
+}
+
+.footer-tagline {
+  margin: var(--space-3) 0 0;
+  /* 40ch：中文行宽按字符数不好控，但 tagline 是固定文案，
+     这个上限保证它在宽屏下换 2 行左右、不拉成一条长横线 */
+  max-width: 40ch;
+  font-size: var(--text-sm);
+  line-height: var(--leading-relaxed);
+  color: var(--color-muted-foreground);
+}
+
+.footer-col-title {
+  margin: 0 0 var(--space-4);
+  font-size: var(--text-xs);
+  font-weight: 600;
+  letter-spacing: var(--tracking-label);
+  color: var(--color-muted-foreground);
+}
+
+.footer-links {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.footer-links a {
+  font-size: var(--text-sm);
+  color: var(--color-subtle-foreground);
+  text-decoration: none;
+  transition: color var(--transition-fast) var(--ease-out);
+}
+
+.footer-links a:hover {
+  color: var(--color-accent);
+}
+
+/* 键盘可达性：页脚链接不少，焦点不可见等于键盘用户没法用 */
+.footer-links a:focus-visible,
+.footer-brand:focus-visible {
+  outline: 2px solid var(--color-ring);
+  outline-offset: 2px;
+  border-radius: var(--radius-sm);
+}
+
+/* 站点数据：做成「标签 …… 读数」的对齐列表而不是统计卡片 ——
+   等宽 + tabular-nums 让数字纵向对齐，读起来像后台读数，不是装饰性的 widget */
+.footer-stats {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.footer-stats li {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--space-3);
+  font-size: var(--text-sm);
+}
+
+.footer-stat-label {
+  color: var(--color-subtle-foreground);
+}
+
+.footer-stat-value {
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+  color: var(--color-foreground);
+}
+
+.footer-bottom {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2) var(--space-4);
+  margin-top: var(--space-8);
+  padding-top: var(--space-5);
+  border-top: 1px solid var(--color-border-hairline);
+  font-size: var(--text-xs);
+  color: var(--color-subtle-foreground);
+}
+
+/* ★ v5 保留：页脚放**真实工程信号**（版本 + 技术栈 + 全文检索方案），等宽小字。
+   灵感来自 V2EX：把版本号这类"真东西"直接摆上页面 ——
    它比任何装饰都更像"这里真的有人在维护"。 */
 .footer-meta {
   font-family: var(--font-mono);
@@ -731,6 +972,11 @@ function onAskAi() {
     border-bottom: 1px solid var(--color-border);
     box-shadow: var(--shadow-md);
   }
+
+  /* 页脚：四栏挤不下 → 两栏（品牌栏与浏览同排，参与与数据同排） */
+  .footer-grid {
+    grid-template-columns: 1fr 1fr;
+  }
 }
 
 /* ---------- 响应式：手机 ---------- */
@@ -762,7 +1008,14 @@ function onAskAi() {
     display: none;
   }
 
-  .footer-inner {
+  /* 页脚：手机单栏堆叠；底栏也改为左对齐纵向排，
+     否则"版权 / 技术栈"在窄屏会被挤成两行参差的中间对齐 */
+  .footer-grid {
+    grid-template-columns: 1fr;
+    gap: var(--space-6);
+  }
+
+  .footer-bottom {
     flex-direction: column;
     align-items: flex-start;
   }

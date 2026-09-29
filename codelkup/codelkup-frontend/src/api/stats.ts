@@ -1,4 +1,4 @@
-import { get } from '@/utils/request'
+import { get, type RequestConfig } from '@/utils/request'
 import type { SiteStatsVO } from '@/types/api'
 
 /**
@@ -8,6 +8,10 @@ import type { SiteStatsVO } from '@/types/api'
  * 并进任何一个都会让那个文件的职责变糊（与后端 StatsController 单独成类的理由一致）。
  */
 export const statsApi = {
-  /** 全站计数：板块 / 标签 / 提问（含解决态）。游客可读 */
-  overview: () => get<SiteStatsVO>('/stats'),
+  /**
+   * 全站计数：板块 / 标签 / 提问（含解决态）。游客可读。
+   *
+   * 传 `{ silent: true }` 时失败不弹全局提示 —— 页脚统计属于"取不到就算了"的信息。
+   */
+  overview: (config?: RequestConfig) => get<SiteStatsVO>('/stats', undefined, config),
 }
