@@ -134,11 +134,20 @@ function clearFilters() {
 
 /* ==================== 查询 ==================== */
 
+/** 请求序号（2026-09-29 纠错）：关键词/筛选/排序连续变更时多个请求并发在途，
+ *  先发的可能后到 —— 旧响应会覆盖新结果（含"清空关键词后又被旧结果填回来"）。
+ *  只允许最新一次请求的结果写入状态。 */
+let loadSeq = 0
+
 async function load() {
+  const seq = ++loadSeq
   if (!hasQuery.value) {
     posts.value = []
     total.value = 0
     pages.value = 0
+    // 空查询也要把 loading 收掉：在途的旧请求已被序号作废，
+    // 不会再替这一次执行 finally（否则骨架屏会一直挂着）
+    loading.value = false
     return
   }
 
@@ -156,14 +165,16 @@ async function load() {
     if (authorId.value) req.authorId = authorId.value
 
     const res = await searchApi.searchPosts(req)
+    if (seq !== loadSeq) return
     posts.value = res.records
     total.value = res.total
     pages.value = res.pages
   } catch (e) {
+    if (seq !== loadSeq) return
     error.value = e instanceof Error ? e.message : '搜索失败'
     posts.value = []
   } finally {
-    loading.value = false
+    if (seq === loadSeq) loading.value = false
   }
 }
 

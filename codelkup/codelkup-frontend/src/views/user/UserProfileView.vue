@@ -93,17 +93,24 @@ async function loadUser() {
   }
 }
 
+/** 请求序号（2026-09-29 纠错）：连点翻页时多个请求并发在途，先发的可能后到，
+ *  旧响应会覆盖新数据。只允许最新一次请求的结果写入状态。 */
+let loadPostsSeq = 0
+
 async function loadPosts() {
+  const seq = ++loadPostsSeq
   loadingPosts.value = true
   try {
     const res = await postApi.list({ authorId: userId.value, page: page.value, size, sort: 'latest' })
+    if (seq !== loadPostsSeq) return
     posts.value = res.records
     total.value = res.total
     pages.value = res.pages
   } catch {
+    if (seq !== loadPostsSeq) return
     posts.value = []
   } finally {
-    loadingPosts.value = false
+    if (seq === loadPostsSeq) loadingPosts.value = false
   }
 }
 
@@ -137,17 +144,29 @@ function onFollowChange(following: boolean) {
 watch(
   userId,
   () => {
-    page.value = 1
     loadUser()
-    loadPosts()
     loadFollowState()
   },
   { immediate: true },
 )
 
+// 帖子列表单独跟随 userId + URL 页码（2026-09-29 纠错）：
+// 原实现把三者绑在 userId 一个 watcher 上、page 只是组件内状态 ——
+// 翻页不写 URL（刷新/前进后退/分享都会丢页码），而换用户时又会连带
+// 重拉列表与资料卡。拆开后：换用户 = 资料卡+关注态+列表全刷，
+// 翻页 = 只重拉列表。
+watch(
+  [userId, () => route.query.page],
+  () => {
+    page.value = Number(route.query.page) || 1
+    loadPosts()
+  },
+  { immediate: true },
+)
+
 function changePage(p: number) {
-  page.value = p
-  loadPosts()
+  // 分页写进 URL（与其它列表页同一做法）
+  router.push({ query: { ...route.query, page: p > 1 ? p : undefined } })
   window.scrollTo({ top: 0, behavior: 'smooth' })
 }
 </script>

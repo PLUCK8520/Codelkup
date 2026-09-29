@@ -6,7 +6,7 @@
  * 回复<b>不再</b>嵌套 CommentItem —— 直接内联渲染，避免无限递归的可能。
  * 这与后端"只做两级"的决策一致。
  */
-import { computed, ref } from 'vue'
+import { computed, ref, watch } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { commentApi } from '@/api/interaction'
 import { useAuthStore } from '@/stores/auth'
@@ -39,6 +39,23 @@ const liking = ref(false)
 /** 本地计数：乐观更新用。初始值来自后端（已合并 Redis 实时值） */
 const likeCount = ref(props.comment.likeCount)
 const liked = ref(props.comment.liked === true)
+
+/* 2026-09-29 纠错：本地状态必须跟随后端刷新（此前只在初始化时读一次 props）。
+   父组件重新拉取评论列表（发新评论后、登录态变化后）时，组件实例被复用、
+   两个 ref 却停留在旧值 —— 表现为"点赞数变回去了 / 我明明点过赞却没高亮"。
+   监听 props 同步，服务端返回的权威值始终能覆盖到本地乐观值。 */
+watch(
+  () => props.comment.likeCount,
+  (v) => {
+    likeCount.value = v
+  },
+)
+watch(
+  () => props.comment.liked,
+  (v) => {
+    liked.value = v === true
+  },
+)
 
 const isPostAuthor = computed(() => props.comment.authorId === props.postAuthorId)
 const isAccepted = computed(() => props.comment.isAccepted === 1)

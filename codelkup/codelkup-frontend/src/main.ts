@@ -1,7 +1,15 @@
 import { createApp } from 'vue'
 import { createPinia } from 'pinia'
+
+/* ⚠️ 2026-09-29 性能清理的**实测结论**：Element Plus 保持全量注册。
+   曾尝试"删掉 app.use(ElementPlus) 改走 vite 按需"（AutoImport/Components 已配），
+   但打包实测：按需 chunk 999,700 B ≈ 全量 1,000,640 B —— 全站 160 处 el-* 已用到
+   EP 的绝大部分组件，"按需"没有可省的余地，反而把注册方式换成一条较少被验证的路径。
+   **回滚，保持全量**（真收益在别处：字体 -4 个 woff2 ≈95KB、首屏不再等一次 API 往返）。 */
 import ElementPlus from 'element-plus'
 import zhCn from 'element-plus/es/locale/lang/zh-cn'
+// CSS 必须保持全量且在 tokens.css 之前：EP 主题是"CSS 变量 + 后到者胜"，
+// tokens 里的 --el-* 覆写依赖这个顺序（按需 CSS 分散在组件模块、顺序不可控）。
 import 'element-plus/dist/index.css'
 
 /* ============================================================
@@ -29,24 +37,20 @@ import 'element-plus/dist/index.css'
    只引入实际用到的字重，避免打包无用的字形：
      IBM Plex Sans 400/500/600/700 —— 拉丁字母与数字（v5 起的界面主字体，
        IBM 为工程场景设计，机械感与横向节奏比 Inter 更有"工作台"气质）
-     Inter 400/500/600/700 —— 保留为回退（万一 Plex 子集未加载）
      JetBrains Mono 400/500/600 —— 代码块 / 编号 / 数字
+   （2026-09-29 性能清理：删掉 Inter 400/500/600/700 —— 它只是"万一 Plex 未加载"的
+     回退，实测永远轮不到（同源字体必到），却全程带着 4 个 woff2 ≈95KB 进构建产物。）
    ============================================================ */
 import '@fontsource/ibm-plex-sans/latin-400.css'
 import '@fontsource/ibm-plex-sans/latin-500.css'
 import '@fontsource/ibm-plex-sans/latin-600.css'
 import '@fontsource/ibm-plex-sans/latin-700.css'
-import '@fontsource/inter/latin-400.css'
-import '@fontsource/inter/latin-500.css'
-import '@fontsource/inter/latin-600.css'
-import '@fontsource/inter/latin-700.css'
 import '@fontsource/jetbrains-mono/latin-400.css'
 import '@fontsource/jetbrains-mono/latin-500.css'
 import '@fontsource/jetbrains-mono/latin-600.css'
 
 import App from './App.vue'
 import router from './router'
-import { useAuthStore } from './stores/auth'
 
 // ⚠️ 设计令牌必须在 Element Plus 样式**之后**引入，
 //    否则我们对 Element 变量的覆写会被它的默认值盖掉
@@ -59,8 +63,7 @@ app.use(pinia)
 app.use(router)
 app.use(ElementPlus, { locale: zhCn })
 
-// 应用挂载前先校验登录态，避免"已登录用户闪一下未登录界面"
-const auth = useAuthStore()
-auth.fetchCurrentUser().finally(() => {
-  app.mount('#app')
-})
+// 2026-09-29 性能清理：不再在挂载前等待 /users/me（省一个 RTT 的白屏）。
+// 登录态校验由 router.beforeEach 的 `await auth.fetchCurrentUser()` 保证 ——
+// 首次导航在首帧前完成，不会闪"未登录界面"；这里也不必重复请求。
+app.mount('#app')

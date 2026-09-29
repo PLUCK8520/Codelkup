@@ -151,10 +151,11 @@
   /* ---------- 字体 ----------
      - IBM Plex Sans：拉丁字母与数字（IBM 为工程场景设计的字体，
        机械感、横向节奏稳定，替代 Inter 的"通用中性脸"）
-     - Inter 保留为回退（万一 Plex 子集未加载）
+     - （2026-09-29：Inter 已从字体栈移除 —— 它作为"回退"永远轮不到，
+       却让构建产物背 4 个 woff2；回退直接落到系统字体，见 main.ts 注释）
      - 中文字形交给系统字体：中文 webfont 动辄数 MB，自托管不划算。
        顺序即优先级：macOS 苹方 → Windows 雅黑 → 鸿蒙/思源/Noto 留位。 */
-  --font-sans: 'IBM Plex Sans', 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI',
+  --font-sans: 'IBM Plex Sans', -apple-system, BlinkMacSystemFont, 'Segoe UI',
     'PingFang SC', 'HarmonyOS Sans SC', 'Source Han Sans SC', 'Noto Sans SC',
     'Microsoft YaHei', sans-serif;
   --font-mono: 'JetBrains Mono', 'SFMono-Regular', Consolas, 'Liberation Mono',

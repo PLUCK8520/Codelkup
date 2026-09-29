@@ -61,21 +61,28 @@ async function loadOwnerName() {
   }
 }
 
+/** 请求序号（2026-09-29 纠错）：切 tab/连点翻页时多个请求并发在途，先发的可能后到，
+ *  旧响应会覆盖新数据。只允许最新一次请求的结果写入状态。 */
+let loadSeq = 0
+
 async function load() {
+  const seq = ++loadSeq
   loading.value = true
   error.value = ''
   try {
     const res = isFollowers.value
       ? await followApi.followers(userId.value, page.value, size)
       : await followApi.followees(userId.value, page.value, size)
+    if (seq !== loadSeq) return
     rows.value = res.records
     total.value = res.total
     pages.value = res.pages
   } catch (e) {
+    if (seq !== loadSeq) return
     error.value = e instanceof Error ? e.message : '加载失败'
     rows.value = []
   } finally {
-    loading.value = false
+    if (seq === loadSeq) loading.value = false
   }
 }
 

@@ -46,8 +46,3 @@ export function formatCount(n?: number | null): string {
   const v = num / 1_000_000
   return (v >= 10 ? Math.round(v) : v.toFixed(1).replace(/\.0$/, '')) + 'm'
 }
-
-/** 截断文本（用于标题过长时的兜底展示） */
-export function truncate(text: string, max = 60): string {
-  return text.length <= max ? text : text.slice(0, max) + '…'
-}

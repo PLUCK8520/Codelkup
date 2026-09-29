@@ -123,13 +123,20 @@ const pageDesc = computed(() => {
   return '来自社区的最新技术讨论'
 })
 
+/** 请求序号（2026-09-29 纠错）：快速切换排序/标签/翻页时会有多个请求并发在途，
+ *  先发出的可能后返回（网络乱序）—— 旧响应会把新数据覆盖回"上一次筛选"的结果。
+ *  每次请求领一个单调递增号，只有最新一次的结果才允许写入状态。 */
+let loadSeq = 0
+
 async function load() {
+  const seq = ++loadSeq
   loading.value = true
   error.value = ''
   try {
     // 关注流走独立接口 —— 它的"分页语义"与列表一致，但数据来源不同
     if (isFollowingFeed.value) {
       const res = await feedApi.following(page.value, size)
+      if (seq !== loadSeq) return
       posts.value = res.records
       total.value = res.total
       pages.value = res.pages
@@ -152,14 +159,16 @@ async function load() {
     }
 
     const res = await postApi.list(query)
+    if (seq !== loadSeq) return
     posts.value = res.records
     total.value = res.total
     pages.value = res.pages
   } catch (e) {
+    if (seq !== loadSeq) return
     error.value = e instanceof Error ? e.message : '加载失败'
     posts.value = []
   } finally {
-    loading.value = false
+    if (seq === loadSeq) loading.value = false
   }
 }
 

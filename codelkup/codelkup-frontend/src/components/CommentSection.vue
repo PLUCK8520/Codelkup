@@ -206,7 +206,7 @@ async function onAccepted(commentId: number) {
       <div v-else class="composer-guest">
         <span>参与讨论，先登录一下</span>
         <RouterLink
-          :to="{ name: 'login', query: { redirect: `/post/${postId}` } }"
+          :to="{ name: 'login', query: { redirect: `/posts/${postId}` } }"
           class="guest-link"
         >
           去登录

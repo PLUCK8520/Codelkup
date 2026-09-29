@@ -59,7 +59,12 @@ const tagName = computed(() => {
 
 const heading = computed(() => (tagName.value ? `#${tagName.value}` : `#${tagId.value}`))
 
+/** 请求序号（2026-09-29 纠错）：换标签/切排序/翻页很快时多个请求并发在途，
+ *  先发的可能后到，旧响应会覆盖新数据。只允许最新一次请求的结果写入状态。 */
+let loadSeq = 0
+
 async function load() {
+  const seq = ++loadSeq
   loading.value = true
   error.value = ''
   try {
@@ -70,14 +75,16 @@ async function load() {
       size,
     }
     const res = await postApi.list(query)
+    if (seq !== loadSeq) return
     posts.value = res.records
     total.value = res.total
     pages.value = res.pages
   } catch (e) {
+    if (seq !== loadSeq) return
     error.value = e instanceof Error ? e.message : '加载失败'
     posts.value = []
   } finally {
-    loading.value = false
+    if (seq === loadSeq) loading.value = false
   }
 }
 

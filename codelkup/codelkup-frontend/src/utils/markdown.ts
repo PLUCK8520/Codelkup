@@ -227,17 +227,3 @@ function escapeHtml(text: string): string {
   }
   return text.replace(/[&<>"']/g, (ch) => map[ch])
 }
-
-/** 从 Markdown 提取纯文本（用于目录/预览，不上屏） */
-export function markdownToPlainText(raw: string | null | undefined): string {
-  if (!raw) return ''
-  return raw
-    .replace(/```[\s\S]*?```/g, ' ')
-    .replace(/`[^`]*`/g, ' ')
-    .replace(/!\[[^\]]*]\([^)]*\)/g, ' ')
-    .replace(/\[([^\]]*)]\([^)]*\)/g, '$1')
-    .replace(/<[^>]+>/g, ' ')
-    .replace(/[#>*_~|-]/g, ' ')
-    .replace(/\s+/g, ' ')
-    .trim()
-}
