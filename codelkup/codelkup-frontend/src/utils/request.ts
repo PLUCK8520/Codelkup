@@ -147,15 +147,28 @@ async function refreshAndReplay(
     return null
   }
   config._retried = true
+  // ⚠️ 2026-09-29 修复（窄窗口竞态）：只清理"自己这一次"的 Promise。
+  //
+  // 原来写的是 `refreshPromise = refreshPromise ?? doRefresh()`，
+  // 然后**每个等待者**在 await 之后都执行 `refreshPromise = null`。
+  // 于是存在这样一个窗口：第一个等待者恢复并把引用清空后，其余等待者还在 await 里，
+  // 此时任何一个新来的 401 请求都会看到 null → **再发起一次刷新**。
+  // 后端 refresh 是单槽位轮换（旧 refresh 已作废），第二次刷新必然失败
+  // → 该请求走 onAuthExpired → 用户莫名其妙被登出。
+  //
+  // 现在：引用只在"最后一个使用者"退出时清理（finally + 身份比对），
+  // 期间新来的请求会复用到**已 resolve 的同一个 Promise**（拿到同一枚 token，不再打后端）。
+  const pending = refreshPromise ?? (refreshPromise = doRefresh())
   try {
-    refreshPromise = refreshPromise ?? doRefresh()
-    const newToken = await refreshPromise
-    refreshPromise = null
+    const newToken = await pending
     config.headers.Authorization = `Bearer ${newToken}`
     return await http.request(config)
   } catch {
-    refreshPromise = null
     return null
+  } finally {
+    if (refreshPromise === pending) {
+      refreshPromise = null
+    }
   }
 }
 
@@ -245,8 +258,15 @@ export async function request<T>(config: RequestConfig): Promise<T> {
   return body.data
 }
 
-export const get = <T>(url: string, params?: object) =>
-  request<T>({ method: 'GET', url, params })
+/**
+ * GET。
+ *
+ * 第三个参数留给 `silent` 这类"请求级开关"（页脚统计这类后台自动行为要用：
+ * 失败时不能弹全局红条）。展开顺序刻意让 method / url / params 排在 config 之后 ——
+ * config 只能补充开关，改不了"这是一次 GET 到这个地址"本身。
+ */
+export const get = <T>(url: string, params?: object, config?: RequestConfig) =>
+  request<T>({ ...config, method: 'GET', url, params })
 
 export const post = <T>(url: string, data?: object) =>
   request<T>({ method: 'POST', url, data })

@@ -125,9 +125,20 @@ async function onSubmit() {
   }
 }
 
-/** 删除后从树上摘掉，并同步计数 */
-function onDeleted(commentId: number) {
-  // 先看是不是回复
+/**
+ * 删除后同步本地树与计数。
+ *
+ * 2026-09-29 修复（计数漂移）：**根评论不能按"整棵子树"扣数**。
+ * 服务端 `CommentService.delete` 只逻辑删除根评论这一条、计数只 -1；
+ * 其下的回复行仍在，`listByPost` 会把它们**提升为一级评论**重新返回
+ * （后端有意为之：不因为楼主删了自己的评论就静默吞掉别人的回复）。
+ * 原来的实现本地删掉整棵子树并扣 `1 + N` —— 于是
+ *   ① 评论数被多扣 N，与服务端立刻对不上；
+ *   ② 刷新后那 N 条回复又出现了，用户看到的是"删了又回来"。
+ * 现在：根评论只扣 1，然后重新拉取，让服务端的真实树（含被提升的回复）接管显示。
+ */
+async function onDeleted(commentId: number) {
+  // 回复：从所属根评论的 replies 里摘掉，计数 -1（与服务端逻辑删除一致）
   for (const root of comments.value) {
     const idx = root.replies?.findIndex((r) => r.id === commentId) ?? -1
     if (idx >= 0 && root.replies) {
@@ -136,16 +147,13 @@ function onDeleted(commentId: number) {
       return
     }
   }
-  // 再找一级评论
+
+  // 一级评论
   const rootIdx = comments.value.findIndex((c) => c.id === commentId)
-  if (rootIdx >= 0) {
-    const removed = comments.value[rootIdx]
-    // 该评论的回复也一并消失（后端逻辑删除评论时不会级联删回复，
-    // 但界面上根评论没了就不该再展示孤立回复）
-    const delta = 1 + (removed.replies?.length ?? 0)
-    comments.value.splice(rootIdx, 1)
-    emit('count-change', -delta)
-  }
+  if (rootIdx < 0) return
+  comments.value.splice(rootIdx, 1)
+  emit('count-change', -1)
+  await load()
 }
 
 /** 采纳答案 —— 采纳后重新拉取（只有一个采纳位，就地改状态容易漏掉旧采纳的取消） */

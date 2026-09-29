@@ -60,6 +60,24 @@ watch(
 const isPostAuthor = computed(() => props.comment.authorId === props.postAuthorId)
 const isAccepted = computed(() => props.comment.isAccepted === 1)
 
+/**
+ * 采纳按钮可见性 —— **必须是楼主本人**。
+ *
+ * 2026-09-29 修复：原来只判「已登录 + 提问帖 + 未采纳 + 一级评论」，漏了楼主身份。
+ * 后果是任何登录用户在别人的提问帖下都能看到每层都挂着的「采纳」按钮，
+ * 点下去被后端 `CommentService.accept` 的 `post.authorId == operatorId` 顶回 40302
+ * —— 不是越权（后端兜得住），而是在别人帖子里摆了一排点不动的按钮 + 误导性报错。
+ * 口径也对齐了同组件里点赞/举报的判定方式。
+ */
+const canAccept = computed(
+  () =>
+    auth.isLoggedIn &&
+    props.isQuestion &&
+    !isAccepted.value &&
+    props.comment.parentId === 0 &&
+    auth.user?.id === props.postAuthorId,
+)
+
 /* ==================== 举报（V0.5 / M5） ====================
    根评论与回复共用一个弹窗实例：举报目标用 reportTargetId 记录，
    点哪一条的"举报"就把哪一条的 ID 填进去。
@@ -130,6 +148,40 @@ async function onDelete() {
     // 拦截器已提示
   } finally {
     deleting.value = false
+  }
+}
+
+/** 正在删除的回复 ID（回复是内联渲染的，共用一个状态即可） */
+const deletingReplyId = ref<number | null>(null)
+
+/**
+ * 删除一条回复。
+ *
+ * 2026-09-29 补：此前回复行只有「回复 / 举报」两个按钮，**作者发错回复后没有任何撤回入口** ——
+ * 而后端 `DELETE /api/comments/{id}` 本来就支持删回复（对任何评论都做归属校验）。
+ * 缺的只是前端落点，属于"能力有、入口没有"的功能缺口。
+ * 流程与根评论保持一致：确认 → 调用 → 上报，计数由父组件按 -1 处理。
+ */
+async function onDeleteReply(reply: CommentVO) {
+  try {
+    await ElMessageBox.confirm('删除后该回复将不再可见。确定删除吗？', '删除回复', {
+      confirmButtonText: '删除',
+      cancelButtonText: '取消',
+      type: 'warning',
+    })
+  } catch {
+    return
+  }
+
+  deletingReplyId.value = reply.id
+  try {
+    await commentApi.remove(reply.id)
+    ElMessage.success('回复已删除')
+    emit('deleted', reply.id)
+  } catch {
+    // 拦截器已提示
+  } finally {
+    deletingReplyId.value = null
   }
 }
 </script>
@@ -215,7 +267,7 @@ async function onDelete() {
         </button>
 
         <button
-          v-if="auth.isLoggedIn && isQuestion && !isAccepted && comment.parentId === 0"
+          v-if="canAccept"
           type="button"
           class="c-act c-act-accept"
           @click="emit('accepted', comment.id)"
@@ -274,6 +326,19 @@ async function onDelete() {
 
             <footer class="c-actions">
               <button type="button" class="c-act" @click="emit('reply', reply)">回复</button>
+
+              <!-- 与根评论同口径：登录即可见，但只有自己的（或管理员）能点 -->
+              <button
+                v-if="auth.isLoggedIn"
+                type="button"
+                class="c-act"
+                :disabled="!reply.canDelete || deletingReplyId === reply.id"
+                :title="reply.canDelete ? '删除回复' : '只能删除自己的回复'"
+                @click="onDeleteReply(reply)"
+              >
+                删除
+              </button>
+
               <button
                 v-if="auth.isLoggedIn && reply.authorId !== auth.user?.id"
                 type="button"
