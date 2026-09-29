@@ -195,6 +195,9 @@ codelkup:
     draft-per-hour: ${RATE_LIMIT_DRAFT_PER_HOUR:240}
     # SSE ticket 签发：120 次/小时/用户（正常一次连接换一张；前端重连也远低于此）
     sse-ticket-per-hour: ${RATE_LIMIT_SSE_TICKET_PER_HOUR:120}
+    # SSE 流消费：240 次/小时/IP（安全审计 run-1 加固：消费端此前无桶 —— 未认证者
+    # 可用随机 ticket 高频触发一次 Redis GETDEL）。额度覆盖正常重连（断网重试/多标签）。
+    sse-stream-per-hour: ${RATE_LIMIT_SSE_STREAM_PER_HOUR:240}
     # 相似问题提示：300 次/小时/用户（编辑器里边写边问，去抖后一次会话约 20~50 次；
     # 不调 LLM，只是检索 + 重排，所以额度给得比 AI 问答宽）
     similar-per-hour: ${RATE_LIMIT_SIMILAR_PER_HOUR:300}

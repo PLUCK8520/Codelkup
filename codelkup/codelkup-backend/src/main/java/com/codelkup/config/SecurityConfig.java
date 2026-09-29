@@ -143,6 +143,12 @@ public class SecurityConfig {
                         .requestMatchers(HttpMethod.GET, "/api/users/me").authenticated()
                         .requestMatchers(HttpMethod.GET, "/api/users/*").permitAll()
 
+                        // ---- 管理面：路径级角色约束（安全审计 run-1 加固）----
+                        // 管理端点本就有方法级 @PreAuthorize("hasRole('ADMIN')")（第二道），
+                        // 这里补上过滤器链这一道：将来新增管理端点若漏标注解，也不会
+                        // 向任何已登录用户开放（默认拒绝的边界从"白名单式"延到方法级之外）。
+                        .requestMatchers("/api/admin/**").hasRole("ADMIN")
+
                         // ---- 其余全部需要认证 ----
                         // 注意：未匹配到任何 Controller 的路径也会落到这里，
                         // 因此"访问不存在的接口"在未登录时返回 40101 而非 40001。

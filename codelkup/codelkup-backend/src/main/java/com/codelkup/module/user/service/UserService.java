@@ -30,6 +30,22 @@ public interface UserService {
     void logout(String accessToken, Long userId);
 
     /**
+     * 从 refreshToken 解析其归属用户 —— 仅供登出兜底定位使用（安全审计 run-1 线索 1）。
+     *
+     * <p>为什么需要：登出接口的撤销链以 {@code userId} 为触发条件，而该 userId 来自
+     * accessToken 的解析结果；access 过期/无效时它会缺失，导致"用户以为登出了、
+     * refresh 白名单却还在（7 天内仍可换新令牌）"。logout 端点因此按"body 优先、
+     * Cookie 兜底"取 refresh 并反解用户（与 {@link #refresh} 同一取值链）。
+     *
+     * <p>安全语义：只信签名有效且 {@code typ=refresh} 的 token（伪造/篡改解析为
+     * null → 维持原 no-op）；不校验白名单槽位（登出本就要删它，槽位已被轮换时
+     * 同样应允许撤销）；谁的值只能注销谁自己的会话，不存在越权面。
+     *
+     * @return 归属用户 id；无法解析时返回 null
+     */
+    Long resolveRefreshOwner(String refreshToken);
+
+    /**
      * 修改密码。
      *
      * @param accessToken 当前请求携带的 accessToken（改密后要把它一起拉黑，

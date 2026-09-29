@@ -224,6 +224,13 @@ public class ReportService {
             if (comment == null) {
                 throw new BusinessException(ErrorCode.COMMENT_NOT_FOUND);
             }
+            // 安全审计 run-1 加固：与帖子分支同口径 —— 评论所属帖子也要求"可见"。
+            // 只查评论的话，已删/下架帖下的评论仍可被举报并进队列（对用户不可见的目标
+            // 本不该产生新举报），与"帖子要求 status=1"的既有判定保持一致。
+            Post post = postMapper.selectById(comment.getPostId());
+            if (post == null || post.getStatus() == null || post.getStatus() != Post.STATUS_PUBLISHED) {
+                throw new BusinessException(ErrorCode.POST_NOT_FOUND);
+            }
             return comment.getAuthorId();
         }
         throw new BusinessException(ErrorCode.PARAM_ERROR, "被举报对象类型不合法");

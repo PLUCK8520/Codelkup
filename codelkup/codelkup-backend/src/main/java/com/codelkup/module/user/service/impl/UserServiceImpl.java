@@ -131,7 +131,13 @@ public class UserServiceImpl implements UserService {
         User user = userMapper.selectByEmail(email);
         // ⚠️ 安全要点：邮箱不存在与密码错误返回**同一条**错误信息，
         //    否则攻击者可据此枚举出哪些邮箱已注册。
-        if (user == null || !passwordEncoder.matches(request.getPassword(), user.getPassword())) {
+        // ⚠️ 时间侧信道（安全审计 run-1 加固）：user==null 的短路会让"邮箱不存在"
+        //    少做一次 BCrypt（约 50~100ms），可被计时枚举出账号存在性。这里让该分支
+        //    也执行一次真实的 BCrypt 比对（对固定 dummy 哈希），把两条路径耗时对齐。
+        boolean passwordOk = user != null
+                ? passwordEncoder.matches(request.getPassword(), user.getPassword())
+                : dummyPasswordCheck(request.getPassword());
+        if (!passwordOk) {
             loginAttemptService.recordFailure(clientIp, email);
             log.warn("登录失败 | email={} | ip={}", maskEmail(email), clientIp);
             throw new BusinessException(ErrorCode.BAD_CREDENTIALS);
@@ -151,6 +157,24 @@ public class UserServiceImpl implements UserService {
 
         log.info("登录成功 | id={} | ip={}", user.getId(), clientIp);
         return issueTokens(user);
+    }
+
+    /**
+     * "邮箱不存在"分支的等时比对（安全审计 run-1 加固）。
+     *
+     * <p>首次调用时用编码器生成一枚合法 BCrypt 哈希并缓存 —— 必须是**真** BCrypt 哈希：
+     * 格式非法时 matches() 会在解析处早退（只打一条警告），起不到时间对齐作用。
+     */
+    private volatile String dummyBcryptHash;
+
+    private boolean dummyPasswordCheck(String rawPassword) {
+        String hash = dummyBcryptHash;
+        if (hash == null) {
+            hash = passwordEncoder.encode("timing-equalization-dummy");
+            dummyBcryptHash = hash;
+        }
+        passwordEncoder.matches(rawPassword, hash);
+        return false;
     }
 
     // ==================== 刷新 ====================
@@ -208,6 +232,25 @@ public class UserServiceImpl implements UserService {
             tokenStore.revokeAccessBefore(userId, Instant.now().getEpochSecond());
         }
         log.info("登出 | userId={}", userId);
+    }
+
+    /**
+     * 从 refreshToken 反解归属用户（登出兜底定位用，见 {@link UserService#resolveRefreshOwner}）。
+     *
+     * <p>安全审计 run-1 线索 1：登出接口在 access 过期/无效时拿不到 userId，
+     * 整条服务端撤销链被跳过。此方法让 controller 用与 /refresh 同源的取值链
+     * （body 优先、Cookie 兜底）补回用户身份。
+     */
+    @Override
+    public Long resolveRefreshOwner(String refreshToken) {
+        if (refreshToken == null || refreshToken.isBlank()) {
+            return null;
+        }
+        Claims claims = jwtTokenProvider.parse(refreshToken);
+        if (claims == null || !jwtTokenProvider.isRefreshToken(claims)) {
+            return null;
+        }
+        return jwtTokenProvider.getUserId(claims);
     }
 
     // ==================== 修改密码 ====================

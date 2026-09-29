@@ -63,6 +63,16 @@ public class SseController {
     @Value("${codelkup.rate-limit.sse-ticket-per-hour:120}")
     private int sseTicketPerHour;
 
+    /**
+     * SSE 流消费限流：默认 240 次/小时/IP（安全审计 run-1 加固）。
+     *
+     * <p>此前消费端没有任何桶：未认证者可对**随机 ticket** 高频打这条 GET，
+     * 每次都会触发一次 Redis GETDEL —— 属预认证放大面。按 IP 限制后，
+     * 正常重连（断网重试、多标签）远低于该额度，脚本喷射则被硬约束。
+     */
+    @Value("${codelkup.rate-limit.sse-stream-per-hour:240}")
+    private int sseStreamPerHour;
+
     @Operation(summary = "换取 SSE ticket",
             description = "需登录；返回 60 秒内有效、只能消费一次的 ticket（绑定签发端 IP）。按用户限流（默认 120 次/小时）")
     @PostMapping("/auth/sse-ticket")
@@ -93,6 +103,11 @@ public class SseController {
             @Size(max = 64, message = "ticket 格式不正确") String ticket,
             HttpServletRequest request,
             HttpServletResponse response) {
+        // 安全审计 run-1 加固：消费端补 IP 维度桶（见 sseStreamPerHour 的说明）——
+        // 必须排在 consumeTicket 之前，否则随机 ticket 仍会先把 Redis 打一次
+        if (!rateLimitService.tryAcquire("sse_stream", request.getRemoteAddr(), sseStreamPerHour, 60)) {
+            throw new BusinessException(ErrorCode.TOO_MANY_REQUESTS, "连接过于频繁，请稍后再试");
+        }
         Long userId = sseService.consumeTicket(ticket, request.getRemoteAddr());
         if (userId == null) {
             throw new BusinessException(ErrorCode.UNAUTHORIZED, "ticket 无效或已被使用，请重新获取");

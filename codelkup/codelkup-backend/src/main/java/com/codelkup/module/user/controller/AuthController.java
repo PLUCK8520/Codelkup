@@ -190,12 +190,21 @@ public class AuthController {
         return Result.success(tokens);
     }
 
-    @Operation(summary = "登出", description = "accessToken 拉黑 + refreshToken 白名单移除 + 清除 HttpOnly Cookie")
+    @Operation(summary = "登出", description = "accessToken 拉黑 + refreshToken 白名单移除 + 清除 HttpOnly Cookie；"
+            + "access 失效时按 refresh（body 优先、Cookie 兜底）反查用户，保证\"登出 = 服务端撤销\"不因 access 过期而落空")
     @PostMapping("/logout")
     public Result<Void> logout(@RequestHeader(value = "Authorization", required = false) String authorization,
                                @CurrentUser Long userId,
+                               @RequestBody(required = false) Map<String, String> body,
+                               @CookieValue(value = REFRESH_COOKIE, required = false) String cookieRefresh,
                                HttpServletResponse response) {
-        userService.logout(extractBearer(authorization), userId);
+        // ⚠️ 安全审计 run-1 线索 1：access 过期/无效时 @CurrentUser 注入 null，
+        //    UserServiceImpl.logout 内的撤销链（删 refresh 白名单 / 撤销水位 / SSE 关流）
+        //    会被整段跳过 —— 用户以为已登出，refresh 白名单却还在（默认 7 天内仍可换新令牌）。
+        //    这里补一条与 /refresh 同源的取值链（body 优先、Cookie 兜底）反解用户；
+        //    只信签名有效的 refresh，伪造值解析为 null → 维持原 no-op；谁的值只注销谁自己的会话。
+        Long effectiveUserId = userId != null ? userId : resolveUserIdFromRefresh(body, cookieRefresh);
+        userService.logout(extractBearer(authorization), effectiveUserId);
         // 双轨收尾：前端已清本地存储，这里清服务端 Cookie
         clearRefreshCookie(response);
         return Result.success();
@@ -223,6 +232,18 @@ public class AuthController {
     }
 
     // ==================== 私有工具 ====================
+
+    /**
+     * 登出兜底定位：从 refresh（body 优先、Cookie 兜底，与 /refresh 同源）解析归属用户。
+     * 解析不到（缺失 / 伪造 / 非 refresh 类型 / 已过期）返回 null —— 调用方维持 no-op。
+     */
+    private Long resolveUserIdFromRefresh(Map<String, String> body, String cookieRefresh) {
+        String refreshToken = body == null ? null : body.get("refreshToken");
+        if (refreshToken == null || refreshToken.isBlank()) {
+            refreshToken = cookieRefresh;
+        }
+        return userService.resolveRefreshOwner(refreshToken);
+    }
 
     /** 从 "Bearer xxx" 中剥离前缀；格式不对返回 null（登出接口容错，不因此报错） */
     private String extractBearer(String authorization) {

@@ -17,6 +17,7 @@ import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.security.crypto.password.PasswordEncoder;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyLong;
@@ -139,6 +140,35 @@ class UserServiceImplTest {
         // 没有 token 就没什么可拉黑的：不应去解析 null，也不该抛异常
         verify(jwtTokenProvider, never()).parse(anyString());
         verify(tokenStore, never()).blacklistAccessToken(any());
+    }
+
+    @Test
+    void resolveRefreshOwner_validRefreshToken_returnsUserId() {
+        Claims claims = mock(Claims.class);
+        when(jwtTokenProvider.parse("r-token")).thenReturn(claims);
+        when(jwtTokenProvider.isRefreshToken(claims)).thenReturn(true);
+        when(jwtTokenProvider.getUserId(claims)).thenReturn(USER_ID);
+
+        assertEquals(USER_ID, service.resolveRefreshOwner("r-token"));
+    }
+
+    /**
+     * 登出兜底定位（安全审计 run-1 线索 1）：只信"签名有效 + typ=refresh"的 token。
+     * 伪造/过期（parse → null）、access 类型、空值一律返回 null —— 维持原 no-op，
+     * 不给攻击者任何"用垃圾值触发别人的撤销"的入口。
+     */
+    @Test
+    void resolveRefreshOwner_invalidAccessOrBlank_returnsNull() {
+        when(jwtTokenProvider.parse("garbage")).thenReturn(null);
+        assertNull(service.resolveRefreshOwner("garbage"));
+
+        Claims accessClaims = mock(Claims.class);
+        when(jwtTokenProvider.parse("a-token")).thenReturn(accessClaims);
+        when(jwtTokenProvider.isRefreshToken(accessClaims)).thenReturn(false);
+        assertNull(service.resolveRefreshOwner("a-token"));
+
+        assertNull(service.resolveRefreshOwner(null));
+        assertNull(service.resolveRefreshOwner("   "));
     }
 
     /** Mockito 的 argThat 需要显式类型推断，这里包一层避免 import 噪音 */
