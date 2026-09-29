@@ -588,30 +588,51 @@ def main():
         return 1
 
     # ---------- 1. 账号 ----------
+    #
+    # ⚠️ **登录优先、注册兜底**（本地复验发现的原实现缺陷）：
+    #    原实现对每个账号**先打 /auth/register**，只有拿到 40901（已存在）才 fallback 登录。
+    #    而注册限流是**按 IP 计次**的（RATE_LIMIT_REGISTER_PER_HOUR），
+    #    于是"复跑一次 seed"要花掉 6 次额度 —— 阈值 10 下**第二次跑必撞 42901**
+    #    （实测 Redis 桶 codelkup:rate:register:<ip> 累积到 11）。
+    #    这与脚本文档自称的"幂等、可反复执行"直接矛盾，也让
+    #    LAUNCH-CHECKLIST 的"演示数据被污染时 seed 重灌"这条路径失效。
+    #    改为：**先登录**（账号已存在 → 成功，零注册开销）；登录失败才注册。
     tokens, ids, created_users = {}, {}, 0
     for key, nickname, tech, bio in USERS:
         email = "%s@%s" % (key, args.email_domain)
         try:
-            data = api(base, "POST", "/auth/register",
-                       {"email": email, "password": args.password, "nickname": nickname})
-            created_users += 1
-            action = "新建"
-        except ApiError as e:
-            # 两种"环境没准备好"的失败给动作化提示（真机复验发现：这两种都会在首次部署时撞上）
-            if "40304" in str(e):
-                print("✗ 注册 %s 被拒：注册开关处于关闭状态（40304）" % email)
-                print("  首次灌数据需要临时开放注册：.env 里 REGISTRATION_ENABLED=true → `docker compose up -d` → 重跑本脚本；")
-                print("  灌完再改回 false → `docker compose restart backend`（已有账号的登录不受影响）。")
-                return 1
-            if "42901" in str(e):
-                print("✗ 注册 %s 被限流（42901）：注册限流按 IP 计，而本脚本要建 %d 个演示账号。" % (email, len(USERS)))
-                print("  处置：.env 里设 RATE_LIMIT_REGISTER_PER_HOUR>=%d → `docker compose up -d`（或清掉该 IP 的桶/等窗口过）→ 重跑本脚本。" % (len(USERS) + 2))
-                return 1
-            if "40901" not in str(e):
-                print("✗ 注册 %s 失败：%s" % (email, e))
-                return 1
             data = api(base, "POST", "/auth/login", {"email": email, "password": args.password})
             action = "已存在→登录"
+        except ApiError as e:
+            # 登录失败才尝试注册。40104 = 邮箱或密码错误（后端**有意不区分**
+            # "账号不存在"与"密码错"，防账号枚举）；42902 = 登录失败次数过多。
+            if "42902" in str(e):
+                print("✗ 登录 %s 失败次数过多（42902）：清掉该账号/IP 的登录失败桶或等窗口过。" % email)
+                return 1
+            if "40104" not in str(e):
+                print("✗ 登录 %s 失败：%s" % (email, e))
+                return 1
+            try:
+                data = api(base, "POST", "/auth/register",
+                           {"email": email, "password": args.password, "nickname": nickname})
+                created_users += 1
+                action = "新建"
+            except ApiError as e2:
+                # 两种"环境没准备好"的失败给动作化提示（真机复验发现：这两种都会在首次部署时撞上）
+                if "40304" in str(e2):
+                    print("✗ 注册 %s 被拒：注册开关处于关闭状态（40304）" % email)
+                    print("  首次灌数据需要临时开放注册：.env 里 REGISTRATION_ENABLED=true → `docker compose up -d` → 重跑本脚本；")
+                    print("  灌完再改回 false → `docker compose up -d backend`（必须 up -d，restart 不重新注入环境变量；已有账号的登录不受影响）。")
+                    return 1
+                if "42901" in str(e2):
+                    print("✗ 注册 %s 被限流（42901）：注册限流按 IP 计，而本脚本要建 %d 个演示账号。" % (email, len(USERS)))
+                    print("  处置：.env 里设 RATE_LIMIT_REGISTER_PER_HOUR>=%d → `docker compose up -d`（或清掉该 IP 的桶/等窗口过）→ 重跑本脚本。" % (len(USERS) + 2))
+                    return 1
+                if "40901" in str(e2):
+                    print("✗ 账号 %s 已存在，但用 --password 登录失败：密码与库中不一致？" % email)
+                    return 1
+                print("✗ 注册 %s 失败：%s" % (email, e2))
+                return 1
         tokens[key] = data["accessToken"]
         ids[key] = data["user"]["id"]
         # 完善资料（技术标签 / 简介）

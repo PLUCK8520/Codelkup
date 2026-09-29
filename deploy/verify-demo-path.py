@@ -244,6 +244,7 @@ def main():
     root_cmt = None
     reply_cmt = None
     cleaned = False
+    follow_was_on = None          # B 对 A 的**初始**关注状态（seed 里已含 xiaoman→ab）
 
     def do_cleanup():
         nonlocal cleaned
@@ -257,8 +258,16 @@ def main():
         if not qid:
             print("     （没有创建过帖子，跳过）")
             return
-        st, b = call(base + "/api/users/%d/follow" % uid_a, "DELETE", token=tk_b)
-        check("[9] 取消关注（还原）", code_of(b) == 0, code_of(b))
+        # 关注关系**按初始状态还原**：seed-demo.py 的 FOLLOWS 第一条就是
+        # ("xiaoman","ab")（B 本关注 A），脚本中途先 DELETE 归零过 ——
+        # 若这里一律 DELETE，就会把 seed 的演示关系静默删掉（本地复验时发现
+        # 库里关注数比 seed 少 1 条，正是此处造成）。初始是关注的就恢复关注。
+        if follow_was_on:
+            st, b = call(base + "/api/users/%d/follow" % uid_a, "POST", token=tk_b)
+            check("[9] 关注关系还原（初始为已关注 → 恢复关注）", code_of(b) == 0, code_of(b))
+        else:
+            st, b = call(base + "/api/users/%d/follow" % uid_a, "DELETE", token=tk_b)
+            check("[9] 关注关系还原（初始未关注 → 保持取消）", code_of(b) == 0, code_of(b))
         st, b = call(base + "/api/posts/%d/like" % qid, "DELETE", token=tk_b)
         check("[9] 取消点赞（还原）", code_of(b) == 0, code_of(b))
         st, b = call(base + "/api/posts/%d/collect" % qid, "DELETE", token=tk_b)
@@ -338,12 +347,22 @@ def main():
     check("[3] 收藏页出现该帖（收藏闭环）", qid in ids_of(b), code_of(b))
 
     # 粉丝数在 follow-state 里（公开主页 VO 不含计数 —— L-2 收过暴露面）
+    #
+    # ⚠️ 必须先把"未关注"这个前置状态**确定下来**，再验证"关注生效"：
+    #    seed-demo.py 的 FOLLOWS 第一条是 ("xiaoman","ab")，即 **B 本就关注 A**。
+    #    直接 POST 会命中幂等路径 —— 接口回 `following=true` 但粉丝数不变，
+    #    断言 "+1" 必然落空（本地复验实测 before=4 after=4）—— 那不是功能坏了，
+    #    是**断言的前提不成立**（脚本假设"B 未关注 A"，seed 却没保证）。
+    #    故：先记住初始状态（清理时按原样还原）→ DELETE 归零 → 再覆盖 before→after。
+    fs_st, fs_body = call(base + "/api/users/%d/follow-state" % uid_a, token=tk_b)
+    follow_was_on = bool((data_of(fs_body) or {}).get("following"))
+    call(base + "/api/users/%d/follow" % uid_a, "DELETE", token=tk_b)
     fs_st, fs_body = call(base + "/api/users/%d/follow-state" % uid_a, token=tk_b)
     before_followers = (data_of(fs_body) or {}).get("followerCount")
     st, b = call(base + "/api/users/%d/follow" % uid_a, "POST", token=tk_b)
     fs_st2, fs_body2 = call(base + "/api/users/%d/follow-state" % uid_a, token=tk_b)
     after_followers = (data_of(fs_body2) or {}).get("followerCount")
-    check("[3] B 关注 A → 粉丝数 +1",
+    check("[3] B 关注 A → 粉丝数 +1（前置已归零，+1 才可证伪）",
           code_of(b) == 0 and isinstance(before_followers, int) and after_followers == before_followers + 1,
           "before=%s after=%s (body=%s)" % (before_followers, after_followers, str(fs_body2)[:80]))
 

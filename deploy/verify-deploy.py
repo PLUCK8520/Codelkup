@@ -236,12 +236,32 @@ def main():
         st, _, _ = call(site + avatar_url)
         check("上传文件经 nginx 可读（数据卷挂载正确）", st == 200, "HTTP %s" % st)
 
-    # ---------- 7. API 文档：公网必须**不可达**（第五轮审计 #2b）----------
+    # ---------- 7. API 文档：公网必须**拿不到内容**（第五轮审计 #2b）----------
     # 匿名可读的接口清单 + 字段模型是攻击者的"地图"；生产（prod profile）已由
     # springdoc.api-docs.enabled=false 关闭，这里断言它确实关着。
-    # （此前这项断言的是"可达"——上线前把它当演示加分项；审计后改口径。）
-    st, _, _ = call(site + "/v3/api-docs")
-    check("API 文档未暴露到公网（/v3/api-docs → 404）", st == 404, "HTTP %s" % st)
+    #
+    # ⚠️ 但**不能断言 HTTP 404** —— 本项目的统一响应设计（自 Sprint 1 起的一贯约定）
+    #    把所有"接口不存在"表达为 **HTTP 200 + 业务码 40001**（`{"code":40001,
+    #    "message":"接口不存在"}`），所以 404 断言**永不成立**。9-29 把这条从
+    #    "可达"翻转为"不可达"时写成了 `st == 404`，此后一直是**纸面断言**
+    #    （期间只跑过 `docker compose config` 静态校验，没在真栈上跑过），
+    #    直到本地复验真跑才暴露。
+    #    教训：**安全断言要针对真正的安全目标（"有没有泄露内容"），
+    #    而不是某个 HTTP 状态码** —— 状态码是实现的副产品，内容才是风险本身。
+    st, body, _ = call(site + "/v3/api-docs")
+    text = body.decode("utf-8", "replace") if isinstance(body, bytes) else json.dumps(body, ensure_ascii=False)
+    leaked = any(k in text for k in ('"openapi"', '"paths"', '"components"', '"swagger"'))
+    check("API 文档未暴露（/v3/api-docs 响应不含 OpenAPI 内容）",
+          not leaked, "HTTP %s body=%s" % (st, text[:100]))
+
+    # Swagger UI 页面同样要不可达：nginx 有 `/swagger-ui` 透传规则（不能删 ——
+    # 删了就落 SPA 回退返回 200 + 首页 HTML），后端 prod 侧已 enabled=false。
+    # 判据同样是"内容"：是否返回了 HTML 页面（而不是统一错误响应）。
+    st_ui, body_ui, _ = call(site + "/swagger-ui/index.html")
+    text_ui = body_ui.decode("utf-8", "replace") if isinstance(body_ui, bytes) else json.dumps(body_ui, ensure_ascii=False)
+    ui_leaked = "<html" in text_ui.lower() and "swagger" in text_ui.lower()
+    check("Swagger UI 未暴露（/swagger-ui 不返回 HTML 页面）",
+          not ui_leaked, "HTTP %s body=%s" % (st_ui, text_ui[:100]))
 
     # ---------- 指标端点：公网必须不可达（M3-10）----------
     # 指标里有业务量级、错误分布与 AI 调用成本，抓取只应发生在**容器网络内**
