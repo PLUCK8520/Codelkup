@@ -186,7 +186,10 @@ def main() -> int:
         print("✗ 导出结果异常小（%d 字节），按失败处理、不落盘" % len(proc.stdout or b""))
         return 1
 
-    with open(target, "wb") as f:
+    # 权限收紧（安全审计 run-1 加固）：dump 含全库口令哈希 / 邮箱 / 通知等，
+    # 显式 0600 落盘，不依赖宿主 umask（常见 0644 会让同机其他用户可读）。
+    fd = os.open(target, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(fd, "wb") as f:
         f.write(gzip.compress(proc.stdout, 6))
     size_kb = target.stat().st_size / 1024
     print("✓ %s（%.1f KB，原始 %.1f KB，耗时 %.1fs）"

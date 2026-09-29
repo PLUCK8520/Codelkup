@@ -15,6 +15,10 @@ on:
   pull_request:
   workflow_dispatch:
 
+# 最小权限（安全审计 run-1 加固）：CI 只读仓库内容，不需要任何写权限
+permissions:
+  contents: read
+
 jobs:
   backend:
     name: 后端 · 编译 + 单测
