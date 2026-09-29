@@ -109,10 +109,12 @@ async function onSubmit() {
     })
     ElMessage.success('注册成功，欢迎加入 Codelkup！')
 
-    // 纵深防御（安全审计 informational）：与登录页同一口径，只接受站内路径
+    // 纵深防御（安全审计 informational）：与登录页同一口径，只接受站内路径；
+    // 反斜杠归一（run-1 加固）：`/\evil.com` 在浏览器 URL 语义中等价 `//evil.com`
     const redirect = route.query.redirect as string | undefined
+    const normalized = redirect?.replace(/\\/g, '/')
     const safeRedirect =
-      redirect && redirect.startsWith('/') && !redirect.startsWith('//') ? redirect : null
+      normalized && normalized.startsWith('/') && !normalized.startsWith('//') ? normalized : null
     router.replace(safeRedirect || { name: 'home' })
   } catch {
     // 拦截器已提示

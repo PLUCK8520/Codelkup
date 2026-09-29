@@ -50,8 +50,11 @@ async function onSubmit() {
     // 站内路径解析裸字符串，但那是框架的隐式行为；显式校验后，将来升级路由库语义
     // 也不会把 `//evil.com` 这类值当成可导航目标
     const redirect = route.query.redirect as string | undefined
+    // 反斜杠归一（安全审计 run-1 加固）：浏览器按 URL 规范把 special scheme 的 `\`
+    // 视作 `/`，`redirect=/\evil.com` 能绕过 startsWith('//')；先归一为 '/' 再判。
+    const normalized = redirect?.replace(/\\/g, '/')
     const safeRedirect =
-      redirect && redirect.startsWith('/') && !redirect.startsWith('//') ? redirect : null
+      normalized && normalized.startsWith('/') && !normalized.startsWith('//') ? normalized : null
     router.replace(safeRedirect || { name: 'home' })
   } catch {
     // 错误提示已由 request 拦截器统一弹出，这里只需恢复按钮状态

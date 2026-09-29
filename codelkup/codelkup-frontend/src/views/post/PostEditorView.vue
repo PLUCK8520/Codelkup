@@ -148,7 +148,7 @@ function onTagBlur() {
 
 /* ==================== 草稿（本地 + 云端） ==================== */
 
-/** 草稿归属：新建稿与各帖的编辑稿互不干扰（同一字符串同时是本地键与远端 scope） */
+/** 草稿归属：新建稿与各帖的编辑稿互不干扰（同一字符串既是远端 scope，也是本地键的 scope 部分） */
 const draftScope = () => (isEdit.value ? `edit:${editId.value}` : 'new')
 
 /**
@@ -195,6 +195,10 @@ const remoteDraftSync: DraftRemote | undefined = auth.isLoggedIn
 
 const draftCtl = useDraft({
   scope: draftScope,
+  // 本地草稿键的用户维度（安全审计 run-1 线索 2）：换账号后本地草稿互不可见，
+  // 避免"后一账号恢复前一账号未发布草稿"。editor 页在路由守卫后必然已登录，
+  // 'anon' 只是极端兜底（不会与任何真实用户碰撞）。
+  owner: () => auth.user?.id ?? 'anon',
   snapshot: (): DraftFields => ({
     title: form.title,
     content: form.content,
@@ -204,6 +208,9 @@ const draftCtl = useDraft({
   }),
   remote: remoteDraftSync,
 })
+
+/** 决策键作用域：与本地草稿同源（含用户维度），保证"恢复表态"也按账号隔离 */
+const draftLocalScope = () => draftCtl.localScope()
 
 /** 把草稿内容灌回表单（本地草稿与云端草稿共用） */
 function applyDraft(d: DraftPayload) {
@@ -246,14 +253,14 @@ async function offerDraftRestore(pending: DraftPayload | null) {
   if (route.query.resume === '1') {
     applyDraft(pending)
     // 显式意图也计入会话态：否则"继续编辑后离开、再从创作进入"会被同一版草稿再问一次
-    rememberDraftDecision(draftScope(), pending, 'restored')
+    rememberDraftDecision(draftLocalScope(), pending, 'restored')
     const { resume: _resume, ...rest } = route.query
     router.replace({ query: rest })
     ElMessage.success('草稿已恢复')
     return
   }
 
-  const decided = recallDraftDecision(draftScope(), pending)
+  const decided = recallDraftDecision(draftLocalScope(), pending)
   if (decided === 'restored') {
     applyDraft(pending)
     ElMessage.success('草稿已恢复')
@@ -274,7 +281,7 @@ async function offerDraftRestore(pending: DraftPayload | null) {
       },
     )
     applyDraft(pending)
-    rememberDraftDecision(draftScope(), pending, 'restored')
+    rememberDraftDecision(draftLocalScope(), pending, 'restored')
     ElMessage.success('草稿已恢复')
   } catch (action) {
     if (action === 'cancel') {
@@ -282,7 +289,7 @@ async function offerDraftRestore(pending: DraftPayload | null) {
       draftCtl.clear()
     } else {
       // 直接关掉对话框 = "还没决定"：保留草稿，但记住"本会话别再问了"
-      rememberDraftDecision(draftScope(), pending, 'kept')
+      rememberDraftDecision(draftLocalScope(), pending, 'kept')
     }
   }
 }

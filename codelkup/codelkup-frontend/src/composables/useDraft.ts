@@ -118,8 +118,24 @@ export function clearDraft(scope: string): void {
 }
 
 export interface UseDraftOptions {
-  /** 草稿归属（new / edit:<id>）；用函数是为了路由参数变化时能取到最新值 */
+  /**
+   * 草稿归属（new / edit:<id>）；用函数是为了路由参数变化时能取到最新值。
+   *
+   * ⚠️ 这是**远端 scope** 的取值，同时作为本地键的一部分参与拼接；
+   * 本地键还会带上 owner（见下），远端接口只认 new / edit:<id> 的原样值。
+   */
   scope: () => string
+  /**
+   * 本地键的用户维度（安全审计 run-1 线索 2）。
+   *
+   * 背景：本地草稿键此前仅含 scope，同一浏览器换账号后，后一账号能读到并
+   * 「恢复」前一账号的未发布草稿（远端草稿按登录态隔离，本地这一层是缺口）。
+   * 传入当前用户标识后，本地键变为 `codelkup_draft_v1_<owner>:<scope>`，
+   * 决策键同理 —— 不同账号的本地草稿与恢复表态互不可见。
+   *
+   * 不传 = 保持旧行为（纯逻辑验收脚本、将来可能的匿名草稿用得上）。
+   */
+  owner?: () => string | number | null | undefined
   /** 取当前表单快照 */
   snapshot: () => DraftFields
   /** 节流窗口，默认 5 秒 */
@@ -244,6 +260,16 @@ export function useDraft(options: UseDraftOptions) {
   const throttleMs = options.throttleMs ?? 5000
   const remoteThrottleMs = options.remoteThrottleMs ?? 15000
 
+  /**
+   * 本地存储作用域 = owner + scope（见 UseDraftOptions.owner）。
+   * 远端调用一律用 options.scope() 原值 —— 后端只认 new / edit:<id>。
+   */
+  function localScope(): string {
+    const owner = options.owner?.()
+    if (owner === undefined || owner === null || owner === '') return options.scope()
+    return `${owner}:${options.scope()}`
+  }
+
   /** 基线：初始加载完成时的表单内容。"与基线相同"意味着没什么可保存的 */
   let baseline: DraftFields | null = null
   let timer: ReturnType<typeof setTimeout> | null = null
@@ -275,7 +301,7 @@ export function useDraft(options: UseDraftOptions) {
 
   /** 读一次已存草稿（不改变内部状态）—— 由调用方决定恢复还是丢弃 */
   function peek(): DraftPayload | null {
-    const payload = readDraft(options.scope())
+    const payload = readDraft(localScope())
     return payload && !isEmptyDraft(payload) ? payload : null
   }
 
@@ -363,7 +389,7 @@ export function useDraft(options: UseDraftOptions) {
 
   function persist() {
     if (!isDirty()) return
-    writeDraft(options.scope(), options.snapshot())
+    writeDraft(localScope(), options.snapshot())
     scheduleRemote()
   }
 
@@ -396,7 +422,7 @@ export function useDraft(options: UseDraftOptions) {
           // ⚠️ 远端也要一起删：只删本地的话，下次进入编辑器远端那份"旧草稿"
           // 会被当成有效内容再弹一次恢复提示（明明用户已经清空了）。
           cancelTimer()
-          clearDraft(options.scope())
+          clearDraft(localScope())
           cancelRemoteTimer()
           clearRemote()
           return
@@ -419,7 +445,7 @@ export function useDraft(options: UseDraftOptions) {
   /** 丢弃草稿并重置基线（发布成功、用户明确"放弃"时调用）；本地与远端一起删 */
   function clear() {
     cancelTimer()
-    clearDraft(options.scope())
+    clearDraft(localScope())
     cancelRemoteTimer()
     clearRemote()
     baseline = clone(options.snapshot())
@@ -446,5 +472,5 @@ export function useDraft(options: UseDraftOptions) {
     })
   }
 
-  return { peek, peekNewest, isDirty, start, flush, clear, stop }
+  return { peek, peekNewest, isDirty, start, flush, clear, stop, localScope }
 }

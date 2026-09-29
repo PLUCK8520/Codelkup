@@ -178,6 +178,34 @@ await sleep(20)
 check('内容改回基线 → 草稿被清理', readDraft('editor') === null)
 check('改回基线后 isDirty 为 false', ctl.isDirty() === false)
 
+/* ---- 账号隔离（安全审计 run-1 线索 2）：本地键必须带 owner 维度 ---- */
+const formA = reactive(fields())
+const ctlA = useDraft({
+  scope: () => 'shared',
+  owner: () => 7,
+  snapshot: () => ({ ...formA, tags: [...formA.tags] }),
+  throttleMs: 20,
+})
+ctlA.start()
+formA.content = 'A 账号的未发布草稿'
+await nextTick()
+ctlA.flush()
+check('带 owner 的草稿写入 owner 命名空间键', kv.has(draftKey('7:shared')), draftKey('7:shared'))
+
+const formB = reactive(fields())
+const ctlB = useDraft({
+  scope: () => 'shared',
+  owner: () => 8,
+  snapshot: () => ({ ...formB, tags: [...formB.tags] }),
+  throttleMs: 20,
+})
+ctlB.start()
+check('换账号（不同 owner）读不到上一账号的草稿', ctlB.peek() === null, JSON.stringify(ctlB.peek()))
+ctlA.stop()
+ctlB.stop()
+clearDraft('7:shared')
+check('owner 命名空间键可正常清理', !kv.has(draftKey('7:shared')))
+
 // 发布成功路径：clear() 之后即使再 flush 也不能把内容写回去
 form.title = '准备发布'
 form.content = '发布前的正文内容'
