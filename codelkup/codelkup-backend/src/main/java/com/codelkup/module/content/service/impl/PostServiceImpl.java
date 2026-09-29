@@ -24,6 +24,7 @@ import com.codelkup.module.content.vo.PostListVO;
 import com.codelkup.module.content.vo.TagVO;
 import com.codelkup.module.content.vo.UserBriefVO;
 import com.codelkup.module.interaction.entity.UserAction;
+import com.codelkup.module.interaction.service.CommentService;
 import com.codelkup.module.interaction.service.CounterService;
 import com.codelkup.module.interaction.service.UserActionService;
 import lombok.RequiredArgsConstructor;
@@ -76,6 +77,7 @@ public class PostServiceImpl implements PostService {
     private final StringRedisTemplate stringRedisTemplate;
     private final CounterService counterService;
     private final UserActionService userActionService;
+    private final CommentService commentService;
     private final PostListAssembler assembler;
 
     // ==================== 列表 ====================
@@ -299,6 +301,18 @@ public class PostServiceImpl implements PostService {
             boardService.addPostCount(update.getBoardId(), 1);
         }
 
+        // 提问帖 → 普通帖：采纳位不再有意义，必须一并清掉（2026-09-29 纠错轮）。
+        // 不清的后果：详情/评论仍显示"已采纳"，且改回提问后能再采纳一次 ——
+        // 来回切换类型成了重复结算声望的刷分路径（与"来回改判"同一漏洞面）。
+        // 条件更新由 CommentService 内部完成：并发改判产生的新采纳不会被误清。
+        if (existing.getType() != null && existing.getType() == Post.TYPE_QUESTION
+                && update.getType() != null && update.getType() == Post.TYPE_NORMAL
+                && commentService.revokeAcceptance(id, existing.getAcceptedCommentId(),
+                        existing.getAuthorId())) {
+            log.info("帖子改为普通帖，已清空采纳位 | postId={} | acceptedCommentId={}",
+                    id, existing.getAcceptedCommentId());
+        }
+
         // 标签整体替换（先全删再重插）
         if (request.getTags() != null) {
             replaceTags(id, request.getTags());
@@ -341,6 +355,11 @@ public class PostServiceImpl implements PostService {
         for (Tag tag : postMapper.selectTagsOfPost(id)) {
             tagService.addUseCount(tag.getId(), -1);
         }
+        // 关联明细一并物理删除（2026-09-29 纠错轮）：t_post_tag 没有 deleted 列，
+        // 帖子逻辑删除后这些行仍留在库里 —— 标签详情页的 EXISTS 关联查询、以及
+        // "按关联重算标签使用数"这类维护脚本都会继续把已删帖算进去，使用数被推歪。
+        // （与编辑时的"整体替换"同一处理：关联是纯明细，无审计价值。）
+        postTagMapper.deleteByPostId(id);
 
         // 清理 Redis 计数 key，避免残留占内存
         // （注意：不删 t_user_action 明细 —— 计数重建脚本仍需要它来算基线，

@@ -45,4 +45,15 @@ public class PostCreateRequest {
     @Schema(description = "标签名列表（不存在会自动创建）", example = "[\"Java\", \"并发\"]")
     @Size(max = 5, message = "最多只能添加 5 个标签")
     private List<@NotBlank(message = "标签名不能为空") @Size(max = 20, message = "标签名不能超过 20 个字符") String> tags;
+
+    /**
+     * 标题在入口处去除首尾空白（2026-09-29 纠错轮）。
+     *
+     * <p>为什么要放在 setter：校验注解在反序列化<b>之后</b>执行 —— 若此时还是
+     * 原始串，`"   abc   "` 会以 9 字符通过 min=4 的校验，落库却是 3 字符的 "abc"，
+     * 校验形同虚设。先 trim 再校验，注解看到的就是真正入库的值。
+     */
+    public void setTitle(String title) {
+        this.title = title == null ? null : title.trim();
+    }
 }

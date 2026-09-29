@@ -292,14 +292,16 @@ public class CommentService {
         boolean changed = !commentId.equals(oldAcceptedId);
 
         if (!changed) {
-            // 幂等路径：补一次通知（保持既有语义），并把评论标记补正
-            //（防历史数据里"帖子指向它、它自己却没标 accepted"的不一致）
+            // 幂等路径：只有"历史不一致"（帖子已指向它、评论自己却没标 accepted）才接管 ——
+            // 补写标记 + 补发一次通知。标记本来就正确时是纯无操作：**不能再发通知**，
+            // 否则连点五次采纳按钮，对方收到五条"你的回答被采纳"
+            // （与点赞幂等路径同一口径；2026-09-29 纠错轮修正）。
             if (comment.getIsAccepted() == null || comment.getIsAccepted() != 1) {
                 comment.setIsAccepted(1);
                 commentMapper.updateById(comment);
+                eventPublisher.publishEvent(NotificationEvent.accept(
+                        comment.getAuthorId(), operatorId, postId));
             }
-            eventPublisher.publishEvent(NotificationEvent.accept(
-                    comment.getAuthorId(), operatorId, postId));
             log.info("重复采纳，幂等返回 | postId={} | commentId={}", postId, commentId);
             return;
         }
@@ -344,6 +346,39 @@ public class CommentService {
         }
 
         log.info("采纳答案 | postId={} | commentId={} | operatorId={}", postId, commentId, operatorId);
+    }
+
+    /**
+     * 清空某帖的采纳位与相关副作用（帖子由"提问帖"改为"普通帖"时被调用）。
+     *
+     * <p>不清理的后果有两层：<b>展示上</b>，详情与评论列表仍显示"已采纳/已解决"，
+     * 而帖子已不是提问帖；<b>结算上</b>，类型改回提问后可以再采纳一次 ——
+     * "来回切换类型"就成了重复结算 +15 声望的刷分路径（与"来回改判"同一漏洞面）。
+     *
+     * <p>条件更新沿用 {@link #accept} / {@link #delete} 的同一写法：仅当采纳位
+     * 仍指向读到的那个评论时才清，并发改判产生的新采纳不会被误清。
+     *
+     * @return 是否真的清掉了采纳位（false = 采纳位为空或已被并发改动）
+     */
+    @Transactional(rollbackFor = Exception.class)
+    public boolean revokeAcceptance(Long postId, Long expectedCommentId, Long postAuthorId) {
+        if (expectedCommentId == null) {
+            return false;
+        }
+        if (postMapper.clearAcceptedComment(postId, expectedCommentId) == 0) {
+            // 采纳位已被并发改动：新采纳归新的改判流程管，这里不碰
+            return false;
+        }
+        Comment accepted = commentMapper.selectById(expectedCommentId);
+        if (accepted != null && accepted.getIsAccepted() != null && accepted.getIsAccepted() == 1) {
+            accepted.setIsAccepted(0);
+            commentMapper.updateById(accepted);
+        }
+        // 收回已结算的声望：与改判/删除被采纳评论同一口径（自己采纳自己不加分，也不扣）
+        if (accepted != null && !accepted.getAuthorId().equals(postAuthorId)) {
+            eventPublisher.publishEvent(ReputationEvent.acceptRevoked(accepted.getAuthorId()));
+        }
+        return true;
     }
 
     // ==================== 私有工具 ====================

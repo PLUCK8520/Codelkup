@@ -48,7 +48,11 @@ spring:
     password: ${DB_PASSWORD}
     hikari:
       minimum-idle: 5
-      maximum-pool-size: 20
+      # 2026-09-29 性能优化：20 → 40。tomcat 线程上限 200，而池只有 20 时，
+      # 并发 DB 请求（列表/计数/SSE 事件落库）会先排队等连接再排队等 DB，
+      # 连接等待上限 30s —— 小池把"DB 慢"放大成"请求超时"。
+      # 40 是 dev 与本机 MySQL（max_connections=151）都富余的取值；SSE 走异步不占此池。
+      maximum-pool-size: 40
       connection-timeout: 30000
       idle-timeout: 600000
       max-lifetime: 1800000
@@ -172,6 +176,11 @@ codelkup:
   rate-limit:
     register-per-hour: ${RATE_LIMIT_REGISTER_PER_HOUR:5}
     login-ip-max: ${RATE_LIMIT_LOGIN_IP_MAX:30}
+    # 登录失败计数（纯邮箱维度，第五轮审计 #1）：15 次/60 分钟 —— 与上一个键的区别是"跨 IP"：
+    # 伪造 XFF / 换 IP 能重置 IP 桶，但换不掉"我在爆破哪个账号"这个事实。
+    # 阈值刻意"宽松 + 长窗"：它挡的是定向爆破，不是给正常用户设坎 ——
+    # 若给得太紧，知道邮箱就能锁死他人账号（DoS 面），比不设还糟。
+    login-email-max: ${RATE_LIMIT_LOGIN_EMAIL_MAX:15}
     # 图片上传：30 次/小时/用户
     upload-per-hour: ${RATE_LIMIT_UPLOAD_PER_HOUR:30}
     # 发帖：20 帖/小时/用户

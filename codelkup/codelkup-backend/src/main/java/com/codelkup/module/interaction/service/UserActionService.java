@@ -191,6 +191,11 @@ public class UserActionService {
         if (comment == null) {
             throw new BusinessException(ErrorCode.COMMENT_NOT_FOUND);
         }
+        // 所属帖子必须仍是已发布状态（2026-09-29 纠错轮）：评论挂在帖子详情页里，
+        // 帖子被删/下架后页面 404，但接口仍可被直接调用 —— 不校验的话，给已删内容
+        // 的评论点赞照样计数、加声望、发通知（与帖子点赞 requirePublishedPost 同口径）。
+        // unlike 不做此校验：取消动作没有副作用，且必须允许把历史点赞减回去。
+        requirePublishedPost(comment.getPostId());
 
         // 自赞拦截（L-1 修复）：与帖子点赞同一规则
         if (comment.getAuthorId().equals(userId)) {

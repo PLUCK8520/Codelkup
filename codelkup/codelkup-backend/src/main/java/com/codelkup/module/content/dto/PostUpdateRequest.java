@@ -37,4 +37,14 @@ public class PostUpdateRequest {
     @Schema(description = "标签名列表（传入即整体替换，传空数组表示清空）")
     @Size(max = 5, message = "最多只能添加 5 个标签")
     private List<@Size(max = 20, message = "标签名不能超过 20 个字符") String> tags;
+
+    /**
+     * 标题在入口处去除首尾空白（2026-09-29 纠错轮）。
+     *
+     * <p>与 {@code PostCreateRequest} 同一理由：校验发生在反序列化之后，
+     * 不先 trim 的话 `"    "`（4 个空格）能通过 min=4，落库却成了空标题。
+     */
+    public void setTitle(String title) {
+        this.title = title == null ? null : title.trim();
+    }
 }

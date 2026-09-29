@@ -393,6 +393,18 @@ public interface PostMapper extends BaseMapper<Post> {
      *
      * <p>排序固定为时间倒序，不做白名单：关注流的语义就是"我关注的人最近发了什么"，
      * 按热度或相关性排都是错的。
+     *
+     * <h2>为什么强制 idx_author_time（2026-09-29 性能轮，实测驱动）</h2>
+     * V14 为"按作者 + 时间"建的 {@code (author_id, create_time)} 索引本可让关注流变成
+     * "索引反扫 + LIMIT 提前停"。但优化器在本查询上持续误估成本（EXPLAIN ANALYZE 实测，
+     * 1 万行 t_post）：
+     * <ul>
+     *   <li>10 位作者的 IN 列表：它选 idx_status_time 全扫（22.6ms），走本索引只要 2.8ms</li>
+     *   <li>单作者：它选索引合并扫 9951 条（3.3ms），走本索引反扫只要 0.13ms</li>
+     * </ul>
+     * 两种形态差距 8~25 倍，且 IN 列表由调用方保证非空 —— 强制该索引不存在退化路径
+     * （列表再大也只是"全索引扫 + 排序"，与它可能选的 status 全扫同量级）。
+     * 若将来索引改名/删除，这里会立刻报错而不是静默变慢（有意为之，好过悄悄退化）。
      */
     @Select("""
             <script>
@@ -401,7 +413,7 @@ public interface PostMapper extends BaseMapper<Post> {
                    p.create_time,
                    u.nickname AS author_nickname, u.avatar AS author_avatar,
                    b.name AS board_name, b.slug AS board_slug
-            FROM t_post p
+            FROM t_post p FORCE INDEX (idx_author_time)
             LEFT JOIN t_user  u ON u.id = p.author_id
             LEFT JOIN t_board b ON b.id = p.board_id
             WHERE p.deleted = 0 AND p.status = 1

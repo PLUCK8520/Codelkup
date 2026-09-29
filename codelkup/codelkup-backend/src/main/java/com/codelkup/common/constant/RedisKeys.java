@@ -33,14 +33,6 @@ public final class RedisKeys {
     /** 评论点赞数：codelkup:count:comment:like:{commentId} */
     public static final String COMMENT_LIKE_COUNT = PREFIX + "count:comment:like:";
 
-    // ===== 缓存 =====
-
-    /** 帖子详情缓存：codelkup:cache:post:{postId} */
-    public static final String POST_DETAIL_CACHE = PREFIX + "cache:post:";
-
-    /** 渲染后 HTML 缓存：codelkup:cache:post:html:{postId}（修订 D4：不落库，缓存到 Redis） */
-    public static final String POST_HTML_CACHE = PREFIX + "cache:post:html:";
-
     // ===== 认证 =====
 
     /** Refresh Token 白名单：codelkup:auth:refresh:{userId} */
@@ -120,14 +112,4 @@ public final class RedisKeys {
 
     /** 接口限流：codelkup:rate:{uri}:{userIdOrIp} */
     public static final String RATE_LIMIT = PREFIX + "rate:";
-
-    // ===== Feed 流（V0.2） =====
-
-    /** 用户收件箱：codelkup:feed:inbox:{userId} */
-    public static final String FEED_INBOX = PREFIX + "feed:inbox:";
-
-    // ===== 排行榜（V0.2） =====
-
-    /** 热门帖 ZSet：codelkup:rank:post:hot */
-    public static final String HOT_POST_RANK = PREFIX + "rank:post:hot";
 }
